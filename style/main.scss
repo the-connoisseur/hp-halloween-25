@@ -2,3 +2,19 @@ body {
 	font-family: sans-serif;
 	text-align: center;
 }
+
+.wordle { text-align: center; }
+.grid { display: flex; flex-direction: column; align-items: center; }
+.row { display: flex; }
+.row div { width: 50px; height: 50px; border: 1px solid gray; margin: 2px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.correct { background: green; color: white; }
+.present { background: yellow; color: black; }
+.absent { background: gray; color: white; }
+
+.keyboard { display: flex; flex-direction: column; align-items: center; margin-top: 20px; }
+.keyboard-row { display: flex; margin-bottom: 5px; }
+.keyboard button { width: 40px; height: 50px; margin: 2px; font-size: 20px; background: lightgray; border: none; cursor: pointer; }
+.keyboard button.special { width: 60px; background: darkgray; color: white; }
+.keyboard button.correct { background: green; color: white; }
+.keyboard button.present { background: yellow; color: black; }
+.keyboard button.absent { background: gray; color: white; }
