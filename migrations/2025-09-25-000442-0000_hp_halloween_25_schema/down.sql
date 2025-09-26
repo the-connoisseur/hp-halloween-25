@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS point_awards;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS guests;
+DROP TABLE IF EXISTS houses;
