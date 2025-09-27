@@ -15,3 +15,9 @@ Cargo.lock
 
 # VSCode settings
 .vscode
+
+# Diesel
+**/.env
+**/diesel.toml
+**/*.db
+**/migrations/.keep
