@@ -1,8 +1,9 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
+use diesel::sqlite::Sqlite;
 use serde::{Deserialize, Serialize};
 
-#[derive(Queryable, Debug, Serialize, Deserialize)]
+#[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::houses)]
 pub struct House {
     pub id: i32,
@@ -48,8 +49,9 @@ pub struct NewSession {
     // No expires_at (NULL for indefinite)
 }
 
-#[derive(Queryable, Debug, Serialize, Deserialize)]
+#[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::point_awards)]
+#[diesel(check_for_backend(Sqlite))]
 pub struct PointAward {
     pub id: i32,
     pub guest_id: Option<i32>,

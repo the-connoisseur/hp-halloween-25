@@ -22,8 +22,8 @@ diesel::table! {
 diesel::table! {
     point_awards (id) {
         id -> Integer,
-        guest_id -> Integer,
-        house_id -> Integer,
+        guest_id -> Nullable<Integer>,
+        house_id -> Nullable<Integer>,
         amount -> Integer,
         reason -> Text,
         awarded_at -> Timestamp,

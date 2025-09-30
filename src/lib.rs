@@ -9,8 +9,8 @@ use dotenvy::dotenv;
 use std::env;
 use uuid::Uuid;
 
-use crate::model::{Guest, NewGuest, NewSession};
-use crate::schema::{guests, houses, sessions};
+use crate::model::{Guest, House, NewGuest, NewPointAward, NewSession, PointAward};
+use crate::schema::{guests, houses, point_awards, sessions};
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -182,6 +182,95 @@ pub fn reregister_guest(
     })
 }
 
+/// Awards or deducts points to a guest. Updates both the guest's personal score and the house
+/// score, and logs the award.
+pub fn award_points_to_guest(
+    conn: &mut SqliteConnection,
+    guest_id: i32,
+    amount: i32,
+    reason: &str,
+) -> Result<PointAward, diesel::result::Error> {
+    conn.transaction(|conn| {
+        // First fetch the guest and their house from the database.
+        let (guest, house): (Guest, House) = guests::table
+            .filter(guests::id.eq(guest_id))
+            .inner_join(houses::table.on(guests::house_id.eq(houses::id)))
+            .select((Guest::as_select(), House::as_select()))
+            .first(conn)?;
+
+        // Update the guest's personal score.
+        diesel::update(guests::table.filter(guests::id.eq(guest_id)))
+            .set(guests::personal_score.eq(guest.personal_score + amount))
+            .execute(conn)?;
+
+        // Update the house score.
+        diesel::update(houses::table.filter(houses::id.eq(house.id)))
+            .set(houses::score.eq(house.score + amount))
+            .execute(conn)?;
+
+        // Log the award.
+        let new_award = NewPointAward {
+            guest_id: Some(guest_id),
+            house_id: None,
+            amount,
+            reason: reason.to_string(),
+        };
+        diesel::insert_into(point_awards::table)
+            .values(&new_award)
+            .get_result(conn)
+    })
+}
+
+/// Awards or deducts points to a house and logs the award.
+pub fn award_points_to_house(
+    conn: &mut SqliteConnection,
+    house_id: i32,
+    amount: i32,
+    reason: &str,
+) -> Result<PointAward, diesel::result::Error> {
+    conn.transaction(|conn| {
+        let house: House = houses::table
+            .filter(houses::id.eq(house_id))
+            .select(House::as_select())
+            .first(conn)?;
+
+        diesel::update(houses::table.filter(houses::id.eq(house_id)))
+            .set(houses::score.eq(house.score + amount))
+            .execute(conn)?;
+
+        let new_award = NewPointAward {
+            guest_id: None,
+            house_id: Some(house_id),
+            amount,
+            reason: reason.to_string(),
+        };
+        diesel::insert_into(point_awards::table)
+            .values(&new_award)
+            .get_result(conn)
+    })
+}
+
+/// Fetches all houses.
+pub fn get_all_houses(conn: &mut SqliteConnection) -> Result<Vec<House>, diesel::result::Error> {
+    houses::table
+        .order(houses::name)
+        .select(House::as_select())
+        .load(conn)
+}
+
+/// Fetches a guest's details, including their house.
+pub fn get_guest_details(
+    conn: &mut SqliteConnection,
+    guest_id: i32,
+) -> Result<(Guest, House), diesel::result::Error> {
+    guests::table
+        .filter(guests::id.eq(guest_id))
+        .inner_join(houses::table.on(guests::house_id.eq(houses::id)))
+        .filter(guests::is_active.eq(1i32))
+        .select((Guest::as_select(), House::as_select()))
+        .first(conn)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +426,153 @@ mod tests {
 
             // Reregister a guest with a house that doesn't exist, verify that an error is returned.
             assert!(reregister_guest(conn, guest.id, Some(69)).is_err());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_all_houses() {
+        run_test_in_transaction(|conn| {
+            // Verify that we can read all 4 houses.
+            let all_houses = get_all_houses(conn)?;
+            assert_eq!(all_houses.len(), 4);
+            assert!(all_houses.iter().find(|h| h.name == "Gryffindor").is_some());
+            assert!(all_houses.iter().find(|h| h.name == "Hufflepuff").is_some());
+            assert!(all_houses.iter().find(|h| h.name == "Ravenclaw").is_some());
+            assert!(all_houses.iter().find(|h| h.name == "Slytherin").is_some());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_guest_details() {
+        run_test_in_transaction(|conn| {
+            // Register a guest with Gryffindor.
+            let (guest, _) = register_guest(conn, "Hagrid", 1)?;
+            let guest_id = guest.id;
+
+            // Read the guest details and verify that they are correct.
+            let (guest, house) = get_guest_details(conn, guest_id)?;
+            assert_eq!(guest.id, guest_id);
+            assert_eq!(guest.name, "Hagrid");
+            assert_eq!(house.name, "Gryffindor");
+
+            // Verify that reading a non-existent guest results in error.
+            let err_nonexistent = get_guest_details(conn, 999).expect_err("Should fail");
+            assert!(matches!(err_nonexistent, diesel::result::Error::NotFound));
+
+            // Verify that reading an unregistered guest results in error.
+            unregister_guest(conn, guest_id)?;
+            let err_unregistered = get_guest_details(conn, guest_id).expect_err("Should fail");
+            assert!(matches!(err_unregistered, diesel::result::Error::NotFound));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_award_points_to_guest() {
+        run_test_in_transaction(|conn| {
+            // Register 3 guests - 2 in Gryffindor and 1 in Slytherin.
+            let (gryffindor_guest_1, _) = register_guest(conn, "Gryffindor Guest 1", 1)?;
+            let (gryffindor_guest_2, _) = register_guest(conn, "Gryffindor Guest 2", 1)?;
+            let (slytherin_guest, _) = register_guest(conn, "Slytherin Guest", 4)?;
+
+            // Award points to first Gryffindor guest, and verify the contents of the returned value.
+            let award = award_points_to_guest(conn, gryffindor_guest_1.id, 10, "Game win")?;
+            assert_eq!(award.amount, 10);
+            assert_eq!(award.reason, "Game win");
+            assert_eq!(award.guest_id, Some(gryffindor_guest_1.id));
+
+            // Read the guest details and verify the individual and house points.
+            let (gryffindor_guest_1, gryffindor) = get_guest_details(conn, gryffindor_guest_1.id)?;
+            assert_eq!(gryffindor_guest_1.personal_score, 10);
+            assert_eq!(gryffindor.score, 10);
+
+            // Deduct points from the same guest. Read the guest details and verify the individual
+            // and house points.
+            award_points_to_guest(conn, gryffindor_guest_1.id, -5, "Penalty")?;
+            let (gryffindor_guest_1, gryffindor) = get_guest_details(conn, gryffindor_guest_1.id)?;
+            assert_eq!(gryffindor_guest_1.personal_score, 5);
+            assert_eq!(gryffindor.score, 5);
+
+            // Award points to second Gryffindor guest. Read the guest details and verify the
+            // individual and house points.
+            award_points_to_guest(conn, gryffindor_guest_2.id, 20, "Game win")?;
+            let (gryffindor_guest_2, gryffindor) = get_guest_details(conn, gryffindor_guest_2.id)?;
+            assert_eq!(gryffindor_guest_2.personal_score, 20);
+            assert_eq!(gryffindor.score, 25);
+
+            // Award points to Slytherin guest. Read the guest details and verify the individual
+            // and house points.
+            award_points_to_guest(conn, slytherin_guest.id, 15, "Game win")?;
+            let (slytherin_guest, slytherin) = get_guest_details(conn, slytherin_guest.id)?;
+            assert_eq!(slytherin_guest.personal_score, 15);
+            assert_eq!(slytherin.score, 15);
+
+            // Award points to a non-existent guest, and verify that an error is returned.
+            let err = award_points_to_guest(conn, 999, 10, "Chumma").expect_err("Should fail");
+            assert!(matches!(err, diesel::result::Error::NotFound));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_award_points_to_house() {
+        run_test_in_transaction(|conn| {
+            // Award points to Gryffindor and verify the contents of the returned value.
+            let award = award_points_to_house(conn, 2, 10, "Guest earned")?;
+            assert_eq!(award.amount, 10);
+            assert_eq!(award.house_id, Some(2));
+            assert_eq!(award.guest_id, None);
+
+            // Award miscellaneous points to all houses.
+            award_points_to_house(conn, 2, -5, "")?;
+            award_points_to_house(conn, 3, 15, "")?;
+            award_points_to_house(conn, 2, 25, "")?;
+            award_points_to_house(conn, 4, -5, "")?;
+            award_points_to_house(conn, 3, -5, "")?;
+
+            // Verify the final tally for all houses.
+            let all_houses = get_all_houses(conn)?;
+            assert_eq!(
+                all_houses
+                    .iter()
+                    .find(|h| h.id == 1)
+                    .expect("Failed to find Gryffindoe")
+                    .score,
+                0
+            );
+            assert_eq!(
+                all_houses
+                    .iter()
+                    .find(|h| h.id == 2)
+                    .expect("Failed to find Hufflepuff")
+                    .score,
+                30
+            );
+            assert_eq!(
+                all_houses
+                    .iter()
+                    .find(|h| h.id == 3)
+                    .expect("Failed to find Ravenclaw")
+                    .score,
+                10
+            );
+            assert_eq!(
+                all_houses
+                    .iter()
+                    .find(|h| h.id == 4)
+                    .expect("Failed to find Slytherin")
+                    .score,
+                -5
+            );
+
+            let err = award_points_to_house(conn, 42, 10, "Chumma").expect_err("Should fail");
+            assert!(matches!(err, diesel::result::Error::NotFound));
 
             Ok(())
         });
