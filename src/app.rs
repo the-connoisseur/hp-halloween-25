@@ -1,5 +1,8 @@
+use leptos::ev::SubmitEvent;
 use leptos::logging::log;
 use leptos::prelude::*;
+use leptos::server_fn::error::NoCustomError;
+use leptos::task::spawn_local;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
@@ -8,6 +11,54 @@ use leptos_router::{
 use rand::prelude::*;
 use rand::rng;
 use std::collections::HashMap;
+
+use crate::model::House;
+#[cfg(feature = "ssr")]
+use crate::{get_all_houses, register_guest};
+
+#[cfg(feature = "ssr")]
+use diesel::r2d2::{ConnectionManager, Pool};
+#[cfg(feature = "ssr")]
+use diesel::SqliteConnection;
+#[cfg(feature = "ssr")]
+pub type DbPool = Pool<ConnectionManager<SqliteConnection>>;
+
+#[server(GetHouses)]
+pub async fn get_houses() -> Result<Vec<House>, ServerFnError<NoCustomError>> {
+    let pool: DbPool = expect_context();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        get_all_houses(&mut conn).map_err(|e| ServerFnError::ServerError(e.to_string()))
+    })
+    .await;
+    match result {
+        Ok(houses) => houses,
+        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
+    }
+}
+
+#[server(RegisterGuest)]
+pub async fn register_guest_handler(
+    name: String,
+    house_id: i32,
+) -> Result<String, ServerFnError<NoCustomError>> {
+    let pool: DbPool = expect_context();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        let (_, token) = register_guest(&mut conn, &name, house_id)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        Ok(token)
+    })
+    .await;
+    match result {
+        Ok(token) => token,
+        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
+    }
+}
 
 const WORDS: &[&str] = &[
     "apple", "bread", "break", "broad", "tread", "bleed", "dreab",
@@ -49,9 +100,99 @@ pub fn App() -> impl IntoView {
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>
                     <Route path=StaticSegment("") view=Wordle />
+                    <Route path=StaticSegment("/register") view=RegisterGuestComponent />
                 </Routes>
             </main>
         </Router>
+    }
+}
+
+#[component]
+fn RegisterGuestComponent() -> impl IntoView {
+    let name = RwSignal::new(String::new());
+    let selected_house = RwSignal::new(0i32);
+    let token = RwSignal::new(Option::<String>::None);
+    let error = RwSignal::new(String::new());
+
+    let houses_resource = Resource::new(|| (), move |_| get_houses());
+
+    let submit = move |ev: SubmitEvent| {
+        ev.prevent_default();
+        let n = name.get();
+        let h = selected_house.get();
+        if n.is_empty() || h == 0 {
+            error.set("Please enter a name and select a house.".to_string());
+            return;
+        }
+        spawn_local(async move {
+            match register_guest_handler(n, h).await {
+                Ok(t) => {
+                    token.set(Some(t));
+                    error.set(String::new());
+                }
+                Err(e) => error.set(e.to_string()),
+            }
+        });
+    };
+
+    view! {
+        <div>
+            <h1>"Register Guest"</h1>
+            <form on:submit=submit>
+                <label>
+                    "Name: "
+                    <input type="text" on:input=move |ev| name.set(event_target_value(&ev)) />
+                </label>
+                <label>
+                    "House:"
+                    <select on:change=move |ev| {
+                        let val = event_target_value(&ev).parse::<i32>().unwrap_or(0);
+                        selected_house.set(val);
+                    }>
+                        <option value="0">"Select a house"</option>
+                        <Suspense fallback=|| {
+                            view! { "Loading..." }
+                        }>
+                            {move || {
+                                houses_resource
+                                    .with(move |opt_res| {
+                                        match opt_res {
+                                            None => view! { "Loading..." }.into_any(),
+                                            Some(res) => {
+                                                match res {
+                                                    Ok(houses) => {
+                                                        houses
+                                                            .iter()
+                                                            .map(|house| {
+                                                                view! {
+                                                                    <option value=house
+                                                                        .id
+                                                                        .to_string()>{house.name.clone()}</option>
+                                                                }
+                                                            })
+                                                            .collect_view()
+                                                            .into_any()
+                                                    }
+                                                    Err(e) => {
+                                                        view! {
+                                                            "Error loading houses: "
+                                                            {e.to_string()}
+                                                        }
+                                                            .into_any()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    })
+                            }}
+                        </Suspense>
+                    </select>
+                </label>
+                <button type="submit">"Submit"</button>
+            </form>
+            {move || error.get().is_empty().then_some(view! { <p>{error.get()}</p> })}
+            {move || token.get().map(|t| view! { <p>"Token: " {t}</p> })}
+        </div>
     }
 }
 

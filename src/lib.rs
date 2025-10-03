@@ -1,15 +1,24 @@
 pub mod app;
 pub mod model;
+#[cfg(feature = "ssr")]
 pub mod schema;
 
+#[cfg(feature = "ssr")]
 use diesel::connection::SimpleConnection;
+#[cfg(feature = "ssr")]
 use diesel::prelude::*;
+#[cfg(feature = "ssr")]
 use diesel::SqliteConnection;
+#[cfg(feature = "ssr")]
 use dotenvy::dotenv;
+#[cfg(feature = "ssr")]
 use std::env;
+#[cfg(feature = "ssr")]
 use uuid::Uuid;
 
+#[cfg(feature = "ssr")]
 use crate::model::{Guest, House, NewGuest, NewPointAward, NewSession, PointAward};
+#[cfg(feature = "ssr")]
 use crate::schema::{guests, houses, point_awards, sessions};
 
 #[cfg(feature = "hydrate")]
@@ -20,6 +29,7 @@ pub fn hydrate() {
     leptos::mount::hydrate_body(App);
 }
 
+#[cfg(feature = "ssr")]
 pub fn establish_connection() -> SqliteConnection {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env");
@@ -40,6 +50,7 @@ pub fn establish_connection() -> SqliteConnection {
 
 /// Registers a new guest, assigns them to a house, and generates a session token.
 /// Returns the guest and token string.
+#[cfg(feature = "ssr")]
 pub fn register_guest(
     conn: &mut SqliteConnection,
     name: &str,
@@ -85,6 +96,7 @@ pub fn register_guest(
 
 /// Retrieves an active guest by their session token.
 /// Validates token as UUID and returns the guest if active.
+#[cfg(feature = "ssr")]
 pub fn get_guest_by_token(
     conn: &mut SqliteConnection,
     token: &str,
@@ -106,6 +118,7 @@ pub fn get_guest_by_token(
 
 /// Unregisters a guest, deletes sessions associated with that guest.
 /// Returns number of affected rows.
+#[cfg(feature = "ssr")]
 pub fn unregister_guest(
     conn: &mut SqliteConnection,
     guest_id: i32,
@@ -121,6 +134,7 @@ pub fn unregister_guest(
 /// and generates a new token.
 /// Returns updated guest and new token if an entry for this guest already exists, or NotFound
 /// error otherwise.
+#[cfg(feature = "ssr")]
 pub fn reregister_guest(
     conn: &mut SqliteConnection,
     guest_id: i32,
@@ -184,6 +198,7 @@ pub fn reregister_guest(
 
 /// Awards or deducts points to a guest. Updates both the guest's personal score and the house
 /// score, and logs the award.
+#[cfg(feature = "ssr")]
 pub fn award_points_to_guest(
     conn: &mut SqliteConnection,
     guest_id: i32,
@@ -222,6 +237,7 @@ pub fn award_points_to_guest(
 }
 
 /// Awards or deducts points to a house and logs the award.
+#[cfg(feature = "ssr")]
 pub fn award_points_to_house(
     conn: &mut SqliteConnection,
     house_id: i32,
@@ -251,6 +267,7 @@ pub fn award_points_to_house(
 }
 
 /// Fetches all houses.
+#[cfg(feature = "ssr")]
 pub fn get_all_houses(conn: &mut SqliteConnection) -> Result<Vec<House>, diesel::result::Error> {
     houses::table
         .order(houses::name)
@@ -259,6 +276,7 @@ pub fn get_all_houses(conn: &mut SqliteConnection) -> Result<Vec<House>, diesel:
 }
 
 /// Fetches a guest's details, including their house.
+#[cfg(feature = "ssr")]
 pub fn get_guest_details(
     conn: &mut SqliteConnection,
     guest_id: i32,
@@ -271,7 +289,7 @@ pub fn get_guest_details(
         .first(conn)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ssr"))]
 mod tests {
     use super::*;
     use crate::schema::houses::dsl::*;

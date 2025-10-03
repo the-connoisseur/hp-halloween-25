@@ -1,16 +1,21 @@
+#[cfg(feature = "ssr")]
 use chrono::NaiveDateTime;
+#[cfg(feature = "ssr")]
 use diesel::prelude::*;
+#[cfg(feature = "ssr")]
 use diesel::sqlite::Sqlite;
 use serde::{Deserialize, Serialize};
 
-#[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
-#[diesel(table_name = crate::schema::houses)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ssr", derive(Queryable, Selectable))]
+#[cfg_attr(feature = "ssr", diesel(table_name = crate::schema::houses))]
 pub struct House {
     pub id: i32,
     pub name: String,
     pub score: i32,
 }
 
+#[cfg(feature = "ssr")]
 #[derive(Queryable, Selectable, Debug, Serialize, Deserialize, Clone)]
 #[diesel(table_name = crate::schema::guests)]
 pub struct Guest {
@@ -22,6 +27,7 @@ pub struct Guest {
     pub created_at: NaiveDateTime,
 }
 
+#[cfg(feature = "ssr")]
 #[derive(Insertable, Debug)]
 #[diesel(table_name = crate::schema::guests)]
 pub struct NewGuest<'a> {
@@ -30,6 +36,7 @@ pub struct NewGuest<'a> {
     // personal_score, is_active, and created_at use defaults
 }
 
+#[cfg(feature = "ssr")]
 #[derive(Queryable, Debug, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::sessions)]
 pub struct Session {
@@ -40,6 +47,7 @@ pub struct Session {
     pub expires_at: Option<NaiveDateTime>,
 }
 
+#[cfg(feature = "ssr")]
 #[derive(Insertable, Debug)]
 #[diesel(table_name = crate::schema::sessions)]
 pub struct NewSession {
@@ -49,6 +57,7 @@ pub struct NewSession {
     // No expires_at (NULL for indefinite)
 }
 
+#[cfg(feature = "ssr")]
 #[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::point_awards)]
 #[diesel(check_for_backend(Sqlite))]
@@ -61,6 +70,7 @@ pub struct PointAward {
     pub awarded_at: NaiveDateTime,
 }
 
+#[cfg(feature = "ssr")]
 #[derive(Insertable, Debug)]
 #[diesel(table_name = crate::schema::point_awards)]
 pub struct NewPointAward {
