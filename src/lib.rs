@@ -289,6 +289,17 @@ pub fn get_guest_details(
         .first(conn)
 }
 
+/// Retrieves all active guests.
+#[cfg(feature = "ssr")]
+pub fn get_all_active_guests(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<Guest>, diesel::result::Error> {
+    guests::table
+        .filter(guests::is_active.eq(1i32))
+        .select(Guest::as_select())
+        .load(conn)
+}
+
 /// Clears all guests from the database, along with their associated sessions and guest-specific
 /// point awards. This does not affect house-specific point awards or house scores.
 #[cfg(feature = "ssr")]
@@ -610,6 +621,27 @@ mod tests {
 
             let err = award_points_to_house(conn, 42, 10, "Chumma").expect_err("Should fail");
             assert!(matches!(err, diesel::result::Error::NotFound));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_all_active_guests() {
+        run_test_in_transaction(|conn| {
+            let active = get_all_active_guests(conn)?;
+            assert_eq!(active.len(), 0);
+
+            // Register some guests.
+            register_guest(conn, "Guest1", 1)?;
+            register_guest(conn, "Guest2", 2)?;
+            let (inactive, _) = register_guest(conn, "Guest3", 3)?;
+            unregister_guest(conn, inactive.id)?;
+
+            let active = get_all_active_guests(conn)?;
+            assert_eq!(active.len(), 2);
+            assert!(active.iter().any(|g| g.name == "Guest1"));
+            assert!(active.iter().any(|g| g.name == "Guest2"));
 
             Ok(())
         });

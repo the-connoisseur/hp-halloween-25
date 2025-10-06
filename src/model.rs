@@ -1,4 +1,3 @@
-#[cfg(feature = "ssr")]
 use chrono::NaiveDateTime;
 #[cfg(feature = "ssr")]
 use diesel::prelude::*;
@@ -15,9 +14,9 @@ pub struct House {
     pub score: i32,
 }
 
-#[cfg(feature = "ssr")]
-#[derive(Queryable, Selectable, Debug, Serialize, Deserialize, Clone)]
-#[diesel(table_name = crate::schema::guests)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ssr", derive(Queryable, Selectable))]
+#[cfg_attr(feature = "ssr", diesel(table_name = crate::schema::guests))]
 pub struct Guest {
     pub id: i32,
     pub name: String,
