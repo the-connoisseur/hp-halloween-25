@@ -53,6 +53,8 @@ codegen-units = 1
 panic = "abort"
 
 [package.metadata.leptos]
+bin-target = "hp-halloween-25"
+
 # The name used by wasm-bindgen/cargo-leptos for the JS/WASM bundle. Defaults to the crate name
 output-name = "hp-halloween-25"
 

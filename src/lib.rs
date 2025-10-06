@@ -289,6 +289,25 @@ pub fn get_guest_details(
         .first(conn)
 }
 
+/// Clears all guests from the database, along with their associated sessions and guest-specific
+/// point awards. This does not affect house-specific point awards or house scores.
+#[cfg(feature = "ssr")]
+pub fn clear_all_guests(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
+    conn.transaction(|conn| {
+        // Delete all sessions.
+        diesel::delete(sessions::table).execute(conn)?;
+
+        // Delete point awards tied to guests.
+        diesel::delete(point_awards::table.filter(point_awards::guest_id.is_not_null()))
+            .execute(conn)?;
+
+        // Delete all guests.
+        diesel::delete(guests::table).execute(conn)?;
+
+        Ok(())
+    })
+}
+
 #[cfg(all(test, feature = "ssr"))]
 mod tests {
     use super::*;
@@ -591,6 +610,40 @@ mod tests {
 
             let err = award_points_to_house(conn, 42, 10, "Chumma").expect_err("Should fail");
             assert!(matches!(err, diesel::result::Error::NotFound));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_clear_all_guests() {
+        run_test_in_transaction(|conn| {
+            // Register some guests and award points.
+            let (guest_1, _) = register_guest(conn, "Guest1", 1)?;
+            let (guest_2, _) = register_guest(conn, "Guest2", 2)?;
+            award_points_to_guest(conn, guest_1.id, 10, "Guest1 award")?;
+            award_points_to_guest(conn, guest_2.id, 20, "Guest1 award")?;
+            award_points_to_house(conn, 1, 15, "House award")?;
+            award_points_to_house(conn, 2, 5, "House award")?;
+
+            // Verify the data exists.
+            let guests_count: i64 = guests::table.count().get_result(conn)?;
+            assert_eq!(guests_count, 2);
+            let sessions_count: i64 = sessions::table.count().get_result(conn)?;
+            assert_eq!(sessions_count, 2);
+            let awards_count: i64 = point_awards::table.count().get_result(conn)?;
+            assert_eq!(awards_count, 4);
+
+            // Clear guests.
+            clear_all_guests(conn)?;
+
+            // Verify that guests, sessions, and guest point awards are cleared.
+            let guests_count: i64 = guests::table.count().get_result(conn)?;
+            assert_eq!(guests_count, 0);
+            let sessions_count: i64 = sessions::table.count().get_result(conn)?;
+            assert_eq!(sessions_count, 0);
+            let awards_count: i64 = point_awards::table.count().get_result(conn)?;
+            assert_eq!(awards_count, 2);
 
             Ok(())
         });
