@@ -77,5 +77,35 @@ pub struct NewPointAward {
     pub house_id: Option<i32>,
     pub amount: i32,
     pub reason: String,
-    // awarded_at uses default
+    pub awarded_at: chrono::NaiveDateTime,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Queryable, Debug, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::admin_sessions)]
+pub struct AdminSession {
+    pub id: i32,
+    pub token: String,
+    pub created_at: NaiveDateTime,
+    pub expires_at: Option<NaiveDateTime>,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = crate::schema::admin_sessions)]
+pub struct NewAdminSession {
+    pub token: String,
+    // created_at uses default
+    // No expires_at (NULL for indefinite)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ssr", derive(Queryable))]
+pub struct PointAwardLog {
+    pub id: i32,
+    pub guest_name: Option<String>,
+    pub house_name: Option<String>,
+    pub amount: i32,
+    pub reason: String,
+    pub awarded_at: NaiveDateTime,
 }

@@ -7,15 +7,20 @@ use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
     hooks::use_navigate,
-    path, NavigateOptions, StaticSegment,
+    path, NavigateOptions,
 };
 use rand::prelude::*;
 use rand::rng;
 use std::collections::HashMap;
+use std::env;
 
-use crate::model::{Guest, House};
+use crate::model::{Guest, House, PointAwardLog};
 #[cfg(feature = "ssr")]
-use crate::{get_all_active_guests, get_all_houses, get_guest_by_token, register_guest};
+use crate::{
+    award_points_to_guest, award_points_to_house, clear_all_guests, create_admin_session,
+    get_all_active_guests, get_all_houses, get_all_point_awards, get_guest_by_token,
+    get_guest_token, register_guest, reregister_guest, unregister_guest, validate_admin_token,
+};
 
 #[cfg(feature = "ssr")]
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -100,11 +105,117 @@ pub async fn get_current_user() -> Result<Option<Guest>, ServerFnError<NoCustomE
     }
 }
 
+#[cfg(feature = "ssr")]
+async fn extract_and_validate_admin_token(
+    pool: DbPool,
+) -> Result<Option<bool>, ServerFnError<NoCustomError>> {
+    use axum::http::HeaderMap;
+    use leptos_axum::extract;
+
+    let headers: HeaderMap = extract()
+        .await
+        .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+
+    let mut admin_token: Option<String> = None;
+    if let Some(cookie_header) = headers.get(axum::http::header::COOKIE) {
+        if let Ok(cookie_str) = cookie_header.to_str() {
+            for cookie in cookie_str.split(';') {
+                let cookie = cookie.trim();
+                if let Some(value) = cookie.strip_prefix("admin_token=") {
+                    admin_token = Some(value.to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<bool>, ServerFnError<NoCustomError>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+            match admin_token {
+                Some(t) => {
+                    let is_valid = validate_admin_token(&mut conn, &t)
+                        .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+                    Ok(Some(is_valid))
+                }
+                None => Ok(None),
+            }
+        },
+    )
+    .await;
+
+    match result {
+        Ok(validity) => validity,
+        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
+    }
+}
+
+// Checks if the current request is from an admin. Returns true if it is, false otherwise.
+#[server(IsAdmin)]
+pub async fn is_admin() -> Result<bool, ServerFnError<NoCustomError>> {
+    let pool: DbPool = expect_context();
+    let validity = extract_and_validate_admin_token(pool).await?;
+    Ok(validity.unwrap_or(false)) // None -> false
+}
+
+// Returns an empty result if the current request is from an admin, or an error otherwise.
+#[cfg(feature = "ssr")]
+async fn check_admin() -> Result<(), ServerFnError<NoCustomError>> {
+    let pool: DbPool = expect_context();
+    let validity = extract_and_validate_admin_token(pool).await?;
+    match validity {
+        Some(true) => Ok(()),
+        _ => Err(ServerFnError::ServerError("Unauthorized".to_string())),
+    }
+}
+
+#[server(AdminLogin)]
+pub async fn admin_login(password: String) -> Result<(), ServerFnError<NoCustomError>> {
+    let pool: DbPool = expect_context();
+    let admin_password = env::var("ADMIN_PASSWORD").map_err(|_| {
+        ServerFnError::<NoCustomError>::ServerError("Admin password not set".to_string())
+    })?;
+
+    if password != admin_password {
+        return Err(ServerFnError::ServerError("Invalid password".to_string()));
+    }
+
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<String, ServerFnError<NoCustomError>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+            create_admin_session(&mut conn).map_err(|e| ServerFnError::ServerError(e.to_string()))
+        })
+        .await;
+
+    let token =
+        result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))??;
+
+    use leptos_axum::ResponseOptions;
+    let resp: ResponseOptions = expect_context();
+    let cookie = format!(
+        "admin_token={}; Max-Age=86400; Path=/; HttpOnly; SameSite=Strict",
+        token
+    );
+    resp.insert_header(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(&cookie)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?,
+    );
+
+    Ok(())
+}
+
 #[server(RegisterGuest)]
 pub async fn register_guest_handler(
     name: String,
     house_id: i32,
 ) -> Result<String, ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
     let pool: DbPool = expect_context();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -120,6 +231,154 @@ pub async fn register_guest_handler(
         Ok(token) => token,
         Err(e) => Err(ServerFnError::ServerError(e.to_string())),
     }
+}
+
+#[server(UnregisterGuest)]
+pub async fn unregister_guest_handler(guest_id: i32) -> Result<(), ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        unregister_guest(&mut conn, guest_id)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        Ok(())
+    })
+    .await;
+    result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+}
+
+#[server(ReregisterGuest)]
+pub async fn reregister_guest_handler(
+    guest_id: i32,
+    new_house_id: Option<i32>,
+) -> Result<String, ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<String, ServerFnError<NoCustomError>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+            let (_, token) = reregister_guest(&mut conn, guest_id, new_house_id)
+                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+            Ok(token)
+        })
+        .await?;
+    match result {
+        Ok(token) => Ok(token),
+        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
+    }
+}
+
+#[server(AwardPointsToGuest)]
+pub async fn award_points_to_guest_handler(
+    guest_id: i32,
+    amount: i32,
+    reason: String,
+) -> Result<(), ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        award_points_to_guest(&mut conn, guest_id, amount, &reason)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        Ok(())
+    })
+    .await;
+    result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+}
+
+#[server(AwardPointsToHouse)]
+pub async fn award_points_to_house_handler(
+    house_id: i32,
+    amount: i32,
+    reason: String,
+) -> Result<(), ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        award_points_to_house(&mut conn, house_id, amount, &reason)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        Ok(())
+    })
+    .await;
+    result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+}
+
+#[server(GetGuestToken)]
+pub async fn get_guest_token_handler(
+    guest_id: i32,
+) -> Result<String, ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        get_guest_token(&mut conn, guest_id)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+
+    match result {
+        Ok(Some(token)) => Ok(token),
+        Ok(None) => Err(ServerFnError::<NoCustomError>::ServerError(
+            "No token found".to_string(),
+        )),
+        Err(e) => Err(e),
+    }
+}
+
+#[server(GetPointAwards)]
+pub async fn get_point_awards() -> Result<Vec<PointAwardLog>, ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        get_all_point_awards(&mut conn)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+}
+
+#[server(ClearAllGuests)]
+pub async fn clear_all_guests_handler() -> Result<(), ServerFnError<NoCustomError>> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        clear_all_guests(&mut conn)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
 }
 
 #[server(Login)]
@@ -201,9 +460,10 @@ pub fn App() -> impl IntoView {
         <Router>
             <main>
                 <Routes fallback=|| "Page not found.".into_view()>
-                    <Route path=StaticSegment("/") view=Home />
-                    <Route path=StaticSegment("/login") view=Login />
-                    <Route path=StaticSegment("/register") view=RegisterGuestComponent />
+                    <Route path=path!("/") view=Home />
+                    <Route path=path!("/login") view=Login />
+                    <Route path=path!("/admin/login") view=AdminLogin />
+                    <Route path=path!("/admin") view=AdminDashboard />
                     <Route path=path!("/games/wordle") view=Wordle />
                 </Routes>
             </main>
@@ -215,6 +475,7 @@ pub fn App() -> impl IntoView {
 fn Home() -> impl IntoView {
     let houses = Resource::new(|| (), |_| get_houses());
     let current_user = Resource::new(|| (), |_| get_current_user());
+    let is_admin_res = Resource::new(|| (), |_| is_admin());
 
     view! {
         <div>
@@ -285,6 +546,22 @@ fn Home() -> impl IntoView {
                                 }
                                     .into_any()
                             }
+                        })
+                }}
+            </Suspense>
+            <Suspense>
+                {move || {
+                    is_admin_res
+                        .with(|admin| match admin {
+                            Some(Ok(true)) => {
+                                view! {
+                                    <p>
+                                        <a href="/admin">"Admin Dashboard"</a>
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            _ => view! {}.into_any(),
                         })
                 }}
             </Suspense>
@@ -377,6 +654,539 @@ fn Login() -> impl IntoView {
             </form>
             {move || (!error.get().is_empty()).then(|| view! { <p>{error.get()}</p> })}
         </div>
+    }
+}
+
+#[component]
+fn AdminLogin() -> impl IntoView {
+    let password = RwSignal::new(String::new());
+    let error = RwSignal::new(String::new());
+
+    let submit = move |ev: SubmitEvent| {
+        ev.prevent_default();
+        let p = password.get();
+        if p.is_empty() {
+            error.set("Please enter password.".to_string());
+            return;
+        }
+        spawn_local(async move {
+            match admin_login(p).await {
+                Ok(_) => {
+                    error.set(String::new());
+                    let navigate = use_navigate();
+                    navigate("/admin", NavigateOptions::default());
+                }
+                Err(e) => error.set(e.to_string()),
+            }
+        });
+    };
+
+    view! {
+        <div>
+            <h1>"Admin Login"</h1>
+            <form on:submit=submit>
+                <label>
+                    "Password: "
+                    <input
+                        type="password"
+                        on:input=move |ev| password.set(event_target_value(&ev))
+                    />
+                </label>
+                <button type="submit">"Login"</button>
+            </form>
+            {move || {
+                if !error.get().is_empty() {
+                    view! { <p>{error.get()}</p> }.into_any()
+                } else {
+                    view! {}.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+#[component]
+fn AdminDashboard() -> impl IntoView {
+    // Fetchers for various resources (state).
+    let is_admin_fetcher = Resource::new(|| (), |_| is_admin());
+    let houses_fetcher = Resource::new(|| (), |_| get_houses());
+    let active_guests_fetcher = Resource::new(|| (), |_| get_active_guests());
+    let point_awards_fetcher = Resource::new(|| (), |_| get_point_awards());
+
+    // Runs on the next "tick" and redirects to the admin login page if the user is not an admin.
+    // NOTE: This effect does not capture any reactive values, so it won't run again.
+    // TODO: Instead, redirect to the homepage. It's better to not advertise the admin login page.
+    let navigate = use_navigate();
+    Effect::new(move || {
+        is_admin_fetcher.with(|maybe_result| {
+            if let Some(Ok(false)) = maybe_result {
+                navigate("/admin/login", NavigateOptions::default());
+            }
+        });
+    });
+
+    // Signals related to registering a new guest.
+    let new_guest_name = RwSignal::new(String::new());
+    let new_guest_house = RwSignal::new(1i32);
+    let register_error = RwSignal::new(String::new());
+    let registered_token = RwSignal::new(String::new());
+
+    // A handler for the register new guest submit button. Attempts to register a new guest with
+    // the provided details. On success, it clears any errors and sets the session token.
+    let register_submit = move |ev: SubmitEvent| {
+        ev.prevent_default();
+        let name = new_guest_name.get();
+        let house_id = new_guest_house.get();
+        spawn_local(async move {
+            match register_guest_handler(name, house_id).await {
+                Ok(token) => {
+                    register_error.set(String::new());
+                    registered_token.set(token.clone());
+                }
+                Err(e) => register_error.set(e.to_string()),
+            }
+        });
+    };
+
+    // Signals related to awarding points to a guest.
+    let award_guest_id = RwSignal::new(0i32);
+    let award_guest_amount = RwSignal::new(0i32);
+    let award_guest_reason = RwSignal::new(String::new());
+    let award_guest_error = RwSignal::new(String::new());
+
+    // A handler for the award guest points submit button. Attempts to award points to the specified
+    // guest. On success, clears any errors and refreshes resources.
+    let award_guest_submit = move |ev: SubmitEvent| {
+        ev.prevent_default();
+        let guest_id = award_guest_id.get();
+        let amount = award_guest_amount.get();
+        let reason = award_guest_reason.get();
+        if guest_id == 0 || reason.is_empty() {
+            award_guest_error.set("Guest and reason are required.".to_string());
+            return;
+        }
+        if amount == 0 {
+            award_guest_error.set("Amount cannot be zero.".to_string());
+            return;
+        }
+        spawn_local(async move {
+            match award_points_to_guest_handler(guest_id, amount, reason).await {
+                Ok(_) => {
+                    award_guest_error.set(String::new());
+                    award_guest_id.set(0i32);
+                    award_guest_amount.set(0i32);
+                    award_guest_reason.set(String::new());
+
+                    active_guests_fetcher.refetch();
+                    houses_fetcher.refetch();
+                    point_awards_fetcher.refetch();
+                }
+                Err(e) => award_guest_error.set(e.to_string()),
+            }
+        });
+    };
+
+    // Signals related to awarding points to a house.
+    let award_house_id = RwSignal::new(0i32);
+    let award_house_amount = RwSignal::new(0i32);
+    let award_house_reason = RwSignal::new(String::new());
+    let award_house_error = RwSignal::new(String::new());
+
+    // A handler for the award house points submit button. Attempts to award points to the specified
+    // house. On success, clears any errors and refreshes resources.
+    let award_house_submit = move |ev: SubmitEvent| {
+        ev.prevent_default();
+        let house_id = award_house_id.get();
+        let amount = award_house_amount.get();
+        let reason = award_house_reason.get();
+        if house_id == 0 || reason.is_empty() {
+            award_house_error.set("House and reason are required.".to_string());
+            return;
+        }
+        if amount == 0 {
+            award_house_error.set("Amount cannot be zero.".to_string());
+            return;
+        }
+        spawn_local(async move {
+            match award_points_to_house_handler(house_id, amount, reason).await {
+                Ok(_) => {
+                    award_house_error.set(String::new());
+                    award_house_id.set(0i32);
+                    award_house_amount.set(0i32);
+                    award_house_reason.set(String::new());
+
+                    active_guests_fetcher.refetch();
+                    houses_fetcher.refetch();
+                    point_awards_fetcher.refetch();
+                }
+                Err(e) => award_house_error.set(e.to_string()),
+            }
+        });
+    };
+
+    let unregister = move |guest_id: i32| {
+        spawn_local(async move {
+            log!("Unregistering");
+            if leptos::leptos_dom::helpers::window()
+                .confirm_with_message("Unregister this guest?")
+                .unwrap_or(false)
+            {
+                match unregister_guest_handler(guest_id).await {
+                    Ok(_) => active_guests_fetcher.refetch(),
+                    Err(e) => log!("Error: {}", e),
+                }
+            }
+        });
+    };
+
+    let show_token = move |guest_id: i32| {
+        spawn_local(async move {
+            match get_guest_token_handler(guest_id).await {
+                Ok(token) => {
+                    leptos::leptos_dom::helpers::window()
+                        .alert_with_message(&format!("Token: {}", token))
+                        .unwrap_or_default();
+                }
+                Err(e) => {
+                    log!("Error fetching token: {}", e);
+                    leptos::leptos_dom::helpers::window()
+                        .alert_with_message(&format!("Error: {}", e))
+                        .unwrap_or_default();
+                }
+            }
+        });
+    };
+
+    view! {
+        <Suspense fallback=|| {
+            "Loading..."
+        }>
+            {move || {
+                if let Some(Ok(true)) = is_admin_fetcher.get() {
+                    view! {
+                        <div>
+                            <h1>"Admin Dashboard"</h1>
+
+                            <h2>"Register New Guest"</h2>
+                            <form on:submit=register_submit>
+                                <input
+                                    type="text"
+                                    placeholder="Name"
+                                    on:input=move |ev| new_guest_name.set(event_target_value(&ev))
+                                />
+                                <select on:change=move |ev| {
+                                    new_guest_house
+                                        .set(event_target_value(&ev).parse().unwrap_or(1))
+                                }>
+                                    <Suspense>
+                                        {move || {
+                                            houses_fetcher
+                                                .with(|maybe_result| match maybe_result {
+                                                    Some(Ok(houses)) => {
+                                                        houses
+                                                            .iter()
+                                                            .map(|house| {
+                                                                view! {
+                                                                    <option value=house
+                                                                        .id
+                                                                        .to_string()>{house.name.clone()}</option>
+                                                                }
+                                                            })
+                                                            .collect_view()
+                                                            .into_any()
+                                                    }
+                                                    _ => view! {}.into_any(),
+                                                })
+                                        }}
+                                    </Suspense>
+                                </select>
+                                <button type="submit">"Register"</button>
+                            </form>
+                            {move || {
+                                if !register_error.get().is_empty() {
+                                    view! { <p>{register_error.get()}</p> }.into_any()
+                                } else {
+                                    view! {}.into_any()
+                                }
+                            }}
+                            {move || {
+                                if !registered_token.get().is_empty() {
+                                    view! { <p>"Token: " {registered_token.get()}</p> }.into_any()
+                                } else {
+                                    view! {}.into_any()
+                                }
+                            }}
+
+                            <h2>"Award Points to Guest"</h2>
+                            <form on:submit=award_guest_submit>
+                                <label>
+                                    "Guest: "
+                                    <select
+                                        prop:value=move || award_guest_id.get().to_string()
+                                        on:change=move |ev| {
+                                            award_guest_id
+                                                .set(event_target_value(&ev).parse().unwrap_or(0))
+                                        }
+                                    >
+                                        <option value="0">"Select guest"</option>
+                                        <Suspense fallback=|| {
+                                            view! { <option>"Loading..."</option> }
+                                        }>
+                                            {move || {
+                                                active_guests_fetcher
+                                                    .with(|maybe_result| match maybe_result {
+                                                        Some(Ok(guests)) => {
+                                                            guests
+                                                                .iter()
+                                                                .map(|guest| {
+                                                                    view! {
+                                                                        <option value=guest
+                                                                            .id
+                                                                            .to_string()>{guest.name.clone()}</option>
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                                .into_any()
+                                                        }
+                                                        _ => view! { <option>"Error"</option> }.into_any(),
+                                                    })
+                                            }}
+                                        </Suspense>
+                                    </select>
+                                </label>
+                                <label>
+                                    "Amount: "
+                                    <input
+                                        type="number"
+                                        prop:value=move || format!("{}", award_guest_amount.get())
+                                        on:input=move |ev| {
+                                            if let Ok(value) = event_target_value(&ev).parse::<i32>() {
+                                                award_guest_amount.set(value);
+                                            }
+                                        }
+                                    />
+                                </label>
+                                <label>
+                                    "Reason: "
+                                    <input
+                                        type="test"
+                                        prop:value=move || award_guest_reason.get()
+                                        on:input=move |ev| {
+                                            award_guest_reason.set(event_target_value(&ev))
+                                        }
+                                    />
+                                </label>
+                                <button type="submit">"Award Points"</button>
+                            </form>
+                            {move || {
+                                if !award_guest_error.get().is_empty() {
+                                    view! { <p class="error">{award_guest_error.get()}</p> }
+                                        .into_any()
+                                } else {
+                                    view! {}.into_view().into_any()
+                                }
+                            }}
+                            <h2>"Award Points to House"</h2>
+                            <form on:submit=award_house_submit>
+                                <label>
+                                    "House: "
+                                    <select
+                                        prop:value=move || award_house_id.get().to_string()
+                                        on:change=move |ev| {
+                                            award_house_id
+                                                .set(event_target_value(&ev).parse().unwrap_or(0))
+                                        }
+                                    >
+                                        <option value="0">"Select house"</option>
+                                        <Suspense fallback=|| {
+                                            view! { <option>"Loading..."</option> }
+                                        }>
+                                            {move || {
+                                                houses_fetcher
+                                                    .with(|maybe_result| match maybe_result {
+                                                        Some(Ok(houses)) => {
+                                                            houses
+                                                                .iter()
+                                                                .map(|house| {
+                                                                    view! {
+                                                                        <option value=house
+                                                                            .id
+                                                                            .to_string()>{house.name.clone()}</option>
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                                .into_any()
+                                                        }
+                                                        _ => view! { <option>"Error"</option> }.into_any(),
+                                                    })
+                                            }}
+                                        </Suspense>
+                                    </select>
+                                </label>
+                                <label>
+                                    "Amount: "
+                                    <input
+                                        type="number"
+                                        prop:value=move || format!("{}", award_house_amount.get())
+                                        on:input=move |ev| {
+                                            if let Ok(value) = event_target_value(&ev).parse::<i32>() {
+                                                award_house_amount.set(value);
+                                            }
+                                        }
+                                    />
+                                </label>
+                                <label>
+                                    "Reason: "
+                                    <input
+                                        prop:value=move || award_house_reason.get()
+                                        type="test"
+                                        on:input=move |ev| {
+                                            award_house_reason.set(event_target_value(&ev))
+                                        }
+                                    />
+                                </label>
+                                <button type="submit">"Award Points"</button>
+                            </form>
+                            {move || {
+                                if !award_house_error.get().is_empty() {
+                                    view! { <p class="error">{award_house_error.get()}</p> }
+                                        .into_any()
+                                } else {
+                                    view! {}.into_view().into_any()
+                                }
+                            }}
+
+                            <h2>"Active Guests"</h2>
+                            <table>
+                                <tbody>
+                                    <tr>
+                                        <th>"ID"</th>
+                                        <th>"Name"</th>
+                                        <th>"House"</th>
+                                        <th>"Score"</th>
+                                        <th>"Actions"</th>
+                                    </tr>
+                                    <Suspense fallback=|| {
+                                        view! {
+                                            <tr>
+                                                <td colspan="5">"Loading..."</td>
+                                            </tr>
+                                        }
+                                    }>
+                                        {move || {
+                                            active_guests_fetcher
+                                                .with(|maybe_result| match maybe_result {
+                                                    Some(Ok(guests)) => {
+                                                        if guests.is_empty() {
+                                                            return view! {
+                                                                <tr>
+                                                                    <td colspan="5">"No active guests"</td>
+                                                                </tr>
+                                                            }
+                                                                .into_any();
+                                                        }
+                                                        guests
+                                                            .iter()
+                                                            .map(|guest| {
+                                                                let id = guest.id;
+                                                                view! {
+                                                                    <tr>
+                                                                        <td>{format!("{}", guest.id)}</td>
+                                                                        <td>{guest.name.clone()}</td>
+                                                                        <td>
+                                                                            {houses_fetcher
+                                                                                .with(|maybe_result| {
+                                                                                    maybe_result
+                                                                                        .as_ref()
+                                                                                        .and_then(|result| result.as_ref().ok())
+                                                                                        .and_then(|houses| {
+                                                                                            houses.iter().find(|house| house.id == guest.house_id)
+                                                                                        })
+                                                                                        .map(|house| house.name.clone())
+                                                                                        .unwrap_or_else(|| "Unknown".to_string())
+                                                                                })}
+                                                                        </td>
+                                                                        <td>{format!("{}", guest.personal_score)}</td>
+                                                                        <td>
+                                                                            <button on:click=move |_| show_token(
+                                                                                id,
+                                                                            )>"Show token"</button>
+                                                                            <button on:click=move |_| unregister(
+                                                                                id,
+                                                                            )>"Unregister"</button>
+                                                                        </td>
+                                                                    </tr>
+                                                                }
+                                                            })
+                                                            .collect_view()
+                                                            .into_any()
+                                                    }
+                                                    _ => {
+                                                        view! {
+                                                            <tr>
+                                                                <td colspan="5">"Loading..."</td>
+                                                            </tr>
+                                                        }
+                                                            .into_view()
+                                                            .into_any()
+                                                    }
+                                                })
+                                        }}
+                                    </Suspense>
+                                </tbody>
+                            </table>
+
+                            <h2>"Point Awards History"</h2>
+                            <table>
+                                <tbody>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Guest</th>
+                                        <th>House</th>
+                                        <th>Amount</th>
+                                        <th>Reason</th>
+                                        <th>Time</th>
+                                    </tr>
+                                    <Suspense>
+                                        {move || {
+                                            point_awards_fetcher
+                                                .with(|maybe_result| match maybe_result {
+                                                    Some(Ok(awards)) => {
+                                                        awards
+                                                            .iter()
+                                                            .map(|award| {
+                                                                view! {
+                                                                    <tr>
+                                                                        <td>{award.id}</td>
+                                                                        <td>
+                                                                            {award.guest_name.clone().unwrap_or("N/A".to_string())}
+                                                                        </td>
+                                                                        <td>
+                                                                            {award.house_name.clone().unwrap_or("N/A".to_string())}
+                                                                        </td>
+                                                                        <td>{award.amount}</td>
+                                                                        <td>{award.reason.clone()}</td>
+                                                                        <td>{award.awarded_at.to_string()}</td>
+                                                                    </tr>
+                                                                }
+                                                            })
+                                                            .collect_view()
+                                                            .into_any()
+                                                    }
+                                                    _ => view! {}.into_view().into_any(),
+                                                })
+                                        }}
+                                    </Suspense>
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    view! { "Loading..." }.into_any()
+                }
+            }}
+        </Suspense>
     }
 }
 

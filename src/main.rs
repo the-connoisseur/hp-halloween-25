@@ -12,7 +12,8 @@ async fn main() {
     use std::env;
 
     dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set.");
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env.");
+    let _ = env::var("ADMIN_PASSWORD").expect("ADMIN_PASSWORD must be set in .env.");
 
     let manager = ConnectionManager::<SqliteConnection>::new(&database_url);
     let pool = Pool::builder()

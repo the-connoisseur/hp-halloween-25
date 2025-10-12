@@ -4,6 +4,8 @@ pub mod model;
 pub mod schema;
 
 #[cfg(feature = "ssr")]
+use chrono::Utc;
+#[cfg(feature = "ssr")]
 use diesel::connection::SimpleConnection;
 #[cfg(feature = "ssr")]
 use diesel::prelude::*;
@@ -17,9 +19,12 @@ use std::env;
 use uuid::Uuid;
 
 #[cfg(feature = "ssr")]
-use crate::model::{Guest, House, NewGuest, NewPointAward, NewSession, PointAward};
+use crate::model::{
+    AdminSession, Guest, House, NewAdminSession, NewGuest, NewPointAward, NewSession, PointAward,
+    PointAwardLog,
+};
 #[cfg(feature = "ssr")]
-use crate::schema::{guests, houses, point_awards, sessions};
+use crate::schema::{admin_sessions, guests, houses, point_awards, sessions};
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -229,6 +234,7 @@ pub fn award_points_to_guest(
             house_id: None,
             amount,
             reason: reason.to_string(),
+            awarded_at: Utc::now().naive_utc(),
         };
         diesel::insert_into(point_awards::table)
             .values(&new_award)
@@ -259,11 +265,76 @@ pub fn award_points_to_house(
             house_id: Some(house_id),
             amount,
             reason: reason.to_string(),
+            awarded_at: Utc::now().naive_utc(),
         };
         diesel::insert_into(point_awards::table)
             .values(&new_award)
             .get_result(conn)
     })
+}
+
+/// Creates an admin session and returns the token.
+#[cfg(feature = "ssr")]
+pub fn create_admin_session(conn: &mut SqliteConnection) -> Result<String, diesel::result::Error> {
+    let uuid_token = Uuid::new_v4();
+    let token_str = uuid_token.to_string();
+    let new_session = NewAdminSession {
+        token: token_str.clone(),
+    };
+    diesel::insert_into(admin_sessions::table)
+        .values(&new_session)
+        .execute(conn)?;
+    Ok(token_str)
+}
+
+/// Validates an admin token. Returns true if the provided token exists in the admin_sessions
+/// table.
+#[cfg(feature = "ssr")]
+pub fn validate_admin_token(
+    conn: &mut SqliteConnection,
+    token: &str,
+) -> Result<bool, diesel::result::Error> {
+    if Uuid::parse_str(token).is_err() {
+        return Ok(false);
+    }
+    let count: i64 = admin_sessions::table
+        .filter(admin_sessions::token.eq(token))
+        .count()
+        .get_result(conn)?;
+    Ok(count > 0)
+}
+
+/// Returns the session token for a specific guest, if it exists.
+#[cfg(feature = "ssr")]
+pub fn get_guest_token(
+    conn: &mut SqliteConnection,
+    guest_id: i32,
+) -> Result<Option<String>, diesel::result::Error> {
+    sessions::table
+        .filter(sessions::guest_id.eq(guest_id))
+        .select(sessions::token)
+        .first(conn)
+        .optional()
+}
+
+/// Returns all point awards with guest and/or house names, in reverse chronological order.
+#[cfg(feature = "ssr")]
+pub fn get_all_point_awards(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<PointAwardLog>, diesel::result::Error> {
+    point_awards::table
+        .left_join(guests::table.on(point_awards::guest_id.eq(guests::id.nullable())))
+        .left_join(houses::table.on(point_awards::house_id.eq(houses::id.nullable())))
+        .select((
+            point_awards::id,
+            guests::name.nullable(),
+            houses::name.nullable(),
+            point_awards::amount,
+            point_awards::reason,
+            point_awards::awarded_at,
+        ))
+        .order(point_awards::awarded_at.desc())
+        .load(conn)
 }
 
 /// Fetches all houses.
@@ -676,6 +747,177 @@ mod tests {
             assert_eq!(sessions_count, 0);
             let awards_count: i64 = point_awards::table.count().get_result(conn)?;
             assert_eq!(awards_count, 2);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_create_admin_session() {
+        run_test_in_transaction(|conn| {
+            // Create a session and verify it's inserted.
+            let token = create_admin_session(conn)?;
+            assert!(!token.is_empty());
+            assert!(Uuid::parse_str(&token).is_ok());
+
+            // Verify the session exists in the DB.
+            let count: i64 = admin_sessions::table
+                .filter(admin_sessions::token.eq(&token))
+                .count()
+                .get_result(conn)?;
+            assert_eq!(count, 1);
+
+            // Check created_at is not null.
+            let session: AdminSession = admin_sessions::table
+                .filter(admin_sessions::token.eq(&token))
+                .first(conn)?;
+            assert!(session.created_at.and_utc().timestamp() > 0);
+            assert!(session.expires_at.is_none());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_validate_admin_token_valid() {
+        run_test_in_transaction(|conn| {
+            // Create a session.
+            let token = create_admin_session(conn)?;
+
+            // Validate it.
+            let is_valid = validate_admin_token(conn, &token)?;
+            assert!(is_valid);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_validate_admin_token_invalid_uuid() {
+        run_test_in_transaction(|conn| {
+            // Create an invalid UUID.
+            let invalid_token = "not-a-uuid".to_string();
+            let is_valid = validate_admin_token(conn, &invalid_token)?;
+            assert!(!is_valid);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_validate_admin_token_nonexistent() {
+        run_test_in_transaction(|conn| {
+            // Create a valid UUID that is not in the DB.
+            let nonexistent_token = Uuid::new_v4().to_string();
+            let is_valid = validate_admin_token(conn, &nonexistent_token)?;
+            assert!(!is_valid);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_guest_token_existing() {
+        run_test_in_transaction(|conn| {
+            // Register a guest.
+            let (guest, _) = register_guest(conn, "Test Guest", 1)?;
+
+            // Get the token.
+            let token_opt = get_guest_token(conn, guest.id)?;
+            assert!(token_opt.is_some());
+            let token = token_opt.unwrap();
+            assert!(!token.is_empty());
+            assert!(Uuid::parse_str(&token).is_ok());
+
+            // Verify it's the same as in session.
+            let session_token: String = sessions::table
+                .filter(sessions::guest_id.eq(guest.id))
+                .select(sessions::token)
+                .first(conn)?;
+            assert_eq!(token, session_token);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_guest_token_nonexistent() {
+        run_test_in_transaction(|conn| {
+            let token_opt = get_guest_token(conn, 999)?;
+            assert!(!token_opt.is_some());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_all_point_awards_empty() {
+        run_test_in_transaction(|conn| {
+            let awards = get_all_point_awards(conn)?;
+            assert!(awards.is_empty());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_all_point_awards_with_guest_award() {
+        run_test_in_transaction(|conn| {
+            let (guest, _) = register_guest(conn, "Award Guest", 1)?;
+            let award = award_points_to_guest(conn, guest.id, 10, "No reason")?;
+
+            let awards = get_all_point_awards(conn)?;
+            assert_eq!(awards.len(), 1);
+            let log_entry = &awards[0];
+            assert_eq!(log_entry.id, award.id);
+            assert_eq!(log_entry.guest_name, Some("Award Guest".to_string()));
+            assert_eq!(log_entry.house_name, None);
+            assert_eq!(log_entry.amount, 10);
+            assert_eq!(log_entry.reason, "No reason".to_string());
+            assert!(log_entry.awarded_at.and_utc().timestamp() > 0);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_all_point_awards_with_house_award() {
+        run_test_in_transaction(|conn| {
+            let award = award_points_to_house(conn, 1, 10, "No reason")?;
+
+            let awards = get_all_point_awards(conn)?;
+            assert_eq!(awards.len(), 1);
+            let log_entry = &awards[0];
+            assert_eq!(log_entry.id, award.id);
+            assert_eq!(log_entry.guest_name, None);
+            assert_eq!(log_entry.house_name, Some("Gryffindor".to_string()));
+            assert_eq!(log_entry.amount, 10);
+            assert_eq!(log_entry.reason, "No reason".to_string());
+            assert!(log_entry.awarded_at.and_utc().timestamp() > 0);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_all_point_awards_multiple_ordered() {
+        run_test_in_transaction(|conn| {
+            let (guest_1, _) = register_guest(conn, "Guest 1", 1)?;
+            award_points_to_guest(conn, guest_1.id, 10, "First")?;
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            award_points_to_house(conn, 4, 5, "Second")?;
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            let (guest_2, _) = register_guest(conn, "Guest 2", 3)?;
+            award_points_to_guest(conn, guest_2.id, 5, "Third")?;
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            award_points_to_guest(conn, guest_1.id, 20, "Fourth")?;
+
+            let awards = get_all_point_awards(conn)?;
+            assert_eq!(awards.len(), 4);
+            assert_eq!(awards[0].reason, "Fourth".to_string());
+            assert_eq!(awards[1].reason, "Third".to_string());
+            assert_eq!(awards[2].reason, "Second".to_string());
+            assert_eq!(awards[3].reason, "First".to_string());
 
             Ok(())
         });
