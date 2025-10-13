@@ -13,6 +13,8 @@ use rand::prelude::*;
 use rand::rng;
 use std::collections::HashMap;
 use std::env;
+#[cfg(feature = "hydrate")]
+use wasm_bindgen::JsCast;
 
 use crate::model::{Guest, House, PointAwardLog};
 #[cfg(feature = "ssr")]
@@ -231,7 +233,7 @@ pub async fn register_guest_handler(
     guest_id: i32,
     house_id: i32,
     character: String,
-) -> Result<String, ServerFnError<NoCustomError>> {
+) -> Result<(String, i32), ServerFnError<NoCustomError>> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
@@ -241,9 +243,10 @@ pub async fn register_guest_handler(
             .get()
             .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
         let effective_house_id = if house_id == 0 { None } else { Some(house_id) };
-        let (_, token) = register_guest(&mut conn, guest_id, effective_house_id, &character)
+        let (guest, token) = register_guest(&mut conn, guest_id, effective_house_id, &character)
             .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        Ok(token)
+        let assigned_house_id = guest.house_id.unwrap();
+        Ok((token, assigned_house_id))
     })
     .await;
     match result {
@@ -750,11 +753,42 @@ fn AdminDashboard() -> impl IntoView {
         }
         spawn_local(async move {
             match register_guest_handler(guest_id, house_id, character).await {
-                Ok(token) => {
+                Ok((token, assigned_house_id)) => {
                     register_error.set(String::new());
                     registered_token.set(token.clone());
                     selected_guest_id.set(0i32);
                     new_guest_character.set(String::new());
+
+                    #[cfg(feature = "hydrate")]
+                    {
+                        // Trigger the sort server.
+                        let sort_url =
+                            format!("http://192.168.1.176/sort?house={}", assigned_house_id);
+                        let window = web_sys::window().expect("window");
+
+                        let mut init = web_sys::RequestInit::new();
+                        init.set_method("GET");
+                        init.set_mode(web_sys::RequestMode::NoCors);
+
+                        let request =
+                            web_sys::Request::new_with_str_and_init(&sort_url, &init).unwrap();
+
+                        let resp_promise = window.fetch_with_request(&request);
+                        let future = wasm_bindgen_futures::JsFuture::from(resp_promise);
+                        log!(
+                            "Sending request to Sorting Hat for house {}",
+                            assigned_house_id
+                        );
+                        wasm_bindgen_futures::spawn_local(async move {
+                            match future.await {
+                                Ok(_) => log!(
+                                    "Sort request sent successfully for house {}",
+                                    assigned_house_id
+                                ),
+                                Err(e) => log!("Fetch error: {:?}", e),
+                            }
+                        });
+                    }
                 }
                 Err(e) => register_error.set(e.to_string()),
             }
