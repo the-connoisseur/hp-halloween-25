@@ -1,8 +1,219 @@
+// Sets the overall page background to dark, white text, sans-serif font,
+// centers text, removes default margins, adds padding, and ensures box sizing
+// is border-box for consistent layout calculations.
 body {
   background-color: #121213;
   color: #ffffff;
   font-family: sans-serif;
   text-align: center;
+  margin: 0;
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+// Centers the admin dashboard content with a max-width of 800px and left-aligns
+// text for better readability in forms and tables.
+.admin-container {
+  max-width: 800px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+// Creates a flexbox header row that spaces the title and logout button evenly;
+// adds a bottom border for separation.
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #3a3a3c;
+}
+
+// Styles each section (e.g., forms, tables) with margins, padding a slightly
+// lighter dark background, rounded corners, and a subtle border for visual
+// grouping.
+.admin-section {
+  margin-bottom: 30px;
+  padding: 20px;
+  background-color: #1a1a1b;
+  border-radius: 8px;
+  border: 1px solid #3a3a3c;
+}
+
+// Uses flexbox to stack form elements vertically with gaps between them for
+// clean, readable forms.
+.admin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+// Flexbox column layout for each label-input pair, with small gaps for spacing.
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+// Styles input fields and dropdowns with dark backgrounds, subtle borders,
+// white text, rounded corners, and touch-friendly sizing (min-height 44px).
+// Adds a yellow border on focus for accessibility. Prevents iOS zoom with
+// font-size 16px;
+.form-input, .form-select {
+  padding: 10px;
+  background-color: #2a2a2b;
+  border: 1px solid #3a3a3c;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 16px;
+  min-height: 44px;
+
+  &:focus {
+    outline: none;
+    border-color: #b59f3a;
+  }
+}
+
+// Base styles for buttons; green background for primary actions, white text, no
+// border, rounded, cursor pointer, touch-friendly height, and smooth hover/
+// active transiitons for interactivity.
+.btn-primary, .btn-secondary, .btn-danger, .btn-logout {
+  padding: 12px 20px;
+  background-color: #538d4e;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  min-height: 44px;
+  transition: background-color 0.2s;
+
+  &:hover {
+    background-color: #6ba468;
+
+  }
+
+  &:active {
+    background-color: #4a7d45;
+
+  }
+}
+
+// Overrides primary button with gray background for secondary actions (e.g.,
+// "Show token").
+.btn-secondary {
+  background-color: #818384;
+
+  &:hover {
+    background-color: #9a9a9a;
+  }
+}
+
+// Overrides with red background for destructive actions (e.g. "Unregister").
+.btn-danger {
+  background-color: #d62828;
+
+  &:hover {
+    background-color: #e63946;
+  }
+}
+
+// Overrides with yellow background for the logout button.
+.btn-logout {
+  background-color: #b59f3a;
+
+  &:hover {
+    background-color: #d4c47a;
+  }
+}
+
+// Styles error messages with red text, dark background, padding, rounded
+// corners, and a red left border for prominent, non-intrusive alerts.
+.error {
+  color: #ff6b6b;
+  background-color:#2a2a2b;
+  padding: 10px;
+  border-radius: 4px;
+  border-left: 4px solid #ff6b6b;
+}
+
+// Highlights generated tokens with yellow text, dark background, padding,
+// rounded corners, and monospace font for easy copying; uses word-break to
+// handle long strings.
+.token-display {
+  color: #b59f3a;
+  background-color: #2a2a2b;
+  padding: 10px;
+  border-radius: 4px;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+// Adds horizontal overflow scrolling for tables on small screens, with vertical
+// margins.
+.table-responsive {
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+// Full-width table with collapsed borders, dark background; styles cells with
+// padding and bottom borders; headers get bold text and darker background; rows
+// highlight on hover.
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  background-color: #1a1a1b;
+
+  th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #3a3a3c;
+  }
+
+  th {
+    background-color: #2a2a2b;
+    font-weight: bold;
+  }
+
+  tr:hover {
+    background-color: #2a2a2b;
+  }
+}
+
+// Mobile responsiveness: Stacks header vertically, reduces section padding,
+// shrinks table font/padding, makes buttons full-width with margins for easier
+// tapping on touch devices.
+@media (max-width: 600px) {
+  .admin-header {
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
+  }
+
+  .admin-section {
+    padding: 15px;
+  }
+
+  .admin-table {
+    font-size: 14px;
+
+    th, td {
+      padding: 8px 4px;
+    }
+  }
+
+  .btn-primary, .btn-secondary, .btn-danger, .btn-logout {
+    width: 100%;
+    margin-bottom: 10px;
+  }
+}
+
+// Applies a serif font (Georgia) to headings for a Harry Potter vibe, with a
+// subtle yellow text shadow for thematic glow.
+h1, h2 {
+  font-family: 'Georgia', serif;
+  text-shadow: 0 0 5px rgba(181, 159, 58, 0.5);
 }
 
 .wordle {

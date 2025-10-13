@@ -228,6 +228,19 @@ pub async fn admin_login(password: String) -> Result<(), ServerFnError<NoCustomE
     Ok(())
 }
 
+#[server(AdminLogout)]
+pub async fn admin_logout() -> Result<(), ServerFnError<NoCustomError>> {
+    use leptos_axum::ResponseOptions;
+    let resp: ResponseOptions = expect_context();
+    let cookie = "admin_token=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict";
+    resp.insert_header(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_str(cookie)
+            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?,
+    );
+    Ok(())
+}
+
 #[server(RegisterGuest)]
 pub async fn register_guest_handler(
     guest_id: i32,
@@ -614,7 +627,7 @@ fn Login() -> impl IntoView {
                         let val = event_target_value(&ev).parse::<i32>().unwrap_or(0);
                         selected_guest.set(val);
                     }>
-                        <option value="0">"Select yout name"</option>
+                        <option value="0">"Select your name"</option>
                         <Suspense fallback=|| {
                             view! { "Loading..." }
                         }>
@@ -748,7 +761,7 @@ fn AdminDashboard() -> impl IntoView {
         let character = new_guest_character.get();
         let house_id = new_guest_house.get();
         if guest_id == 0 || character.is_empty() {
-            register_error.set("Guest, character, and hosue are required.".to_string());
+            register_error.set("Guest, character, and house are required.".to_string());
             return;
         }
         spawn_local(async move {
@@ -904,6 +917,14 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
+    let logout = move |_| {
+        spawn_local(async move {
+            let _ = admin_logout().await;
+            let navigate = use_navigate();
+            navigate("/", NavigateOptions::default());
+        });
+    };
+
     view! {
         <Suspense fallback=|| {
             "Loading..."
@@ -911,376 +932,438 @@ fn AdminDashboard() -> impl IntoView {
             {move || {
                 if let Some(Ok(true)) = is_admin_fetcher.get() {
                     view! {
-                        <div>
-                            <h1>"Admin Dashboard"</h1>
+                        <div class="admin-container">
+                            <header class="admin-header">
+                                <h1>"Admin Dashboard"</h1>
+                                <button class="btn-logout" on:click=logout>
+                                    "Logout"
+                                </button>
+                            </header>
 
-                            <h2>"Register New Guest"</h2>
-                            <form on:submit=register_submit>
-                                <label>
-                                    "Guest: "
-                                    <select
-                                        prop:value=move || selected_guest_id.get().to_string()
-                                        on:change=move |ev| {
-                                            selected_guest_id
-                                                .set(event_target_value(&ev).parse().unwrap_or(0))
-                                        }
-                                    >
-                                        <option value="0">"Select guest"</option>
-                                        <Suspense fallback=|| {
-                                            view! { <option>"Loading..."</option> }
-                                        }>
-                                            {move || {
-                                                unregistered_guests_fetcher
-                                                    .with(|maybe_result| match maybe_result {
-                                                        Some(Ok(guests)) => {
-                                                            let mut sorted_guests = guests.clone();
-                                                            sorted_guests
-                                                                .sort_by(|a, b| {
-                                                                    a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                                                                });
-                                                            sorted_guests
-                                                                .iter()
-                                                                .map(|guest| {
-                                                                    view! {
-                                                                        <option value=guest
-                                                                            .id
-                                                                            .to_string()>{guest.name.clone()}</option>
-                                                                    }
-                                                                })
-                                                                .collect_view()
-                                                                .into_any()
-                                                        }
-                                                        _ => view! { <option>"Error"</option> }.into_any(),
-                                                    })
-                                            }}
-                                        </Suspense>
-                                    </select>
-                                </label>
-                                <label>
-                                    "Character: "
-                                    <input
-                                        type="text"
-                                        placeholder="e.g., Harry Potter"
-                                        prop:value=move || new_guest_character.get()
-                                        on:input=move |ev| {
-                                            new_guest_character.set(event_target_value(&ev))
-                                        }
-                                    />
-                                </label>
-                                <label>
-                                    "House: "
-                                    <select
-                                        prop:value=move || new_guest_house.get().to_string()
-                                        on:change=move |ev| {
-                                            new_guest_house
-                                                .set(event_target_value(&ev).parse().unwrap_or(1))
-                                        }
-                                    >
-                                        <option value="0">"Sorting Hat"</option>
-                                        <Suspense fallback=|| {
-                                            view! { <option>"Loading..."</option> }
-                                        }>
-                                            {move || {
-                                                houses_fetcher
-                                                    .with(|maybe_result| match maybe_result {
-                                                        Some(Ok(houses)) => {
-                                                            houses
-                                                                .iter()
-                                                                .map(|house| {
-                                                                    view! {
-                                                                        <option value=house
-                                                                            .id
-                                                                            .to_string()>{house.name.clone()}</option>
-                                                                    }
-                                                                })
-                                                                .collect_view()
-                                                                .into_any()
-                                                        }
-                                                        _ => view! { <option>"Error"</option> }.into_any(),
-                                                    })
-                                            }}
-                                        </Suspense>
-                                    </select>
-                                </label>
-                                <button type="submit">"Sort"</button>
-                            </form>
-                            {move || {
-                                if !register_error.get().is_empty() {
-                                    view! { <p class="error">{register_error.get()}</p> }.into_any()
-                                } else {
-                                    view! {}.into_any()
-                                }
-                            }}
-                            {move || {
-                                if !registered_token.get().is_empty() {
-                                    view! { <p>"Token: " {registered_token.get()}</p> }.into_any()
-                                } else {
-                                    view! {}.into_any()
-                                }
-                            }}
-
-                            <h2>"Award Points to Guest"</h2>
-                            <form on:submit=award_guest_submit>
-                                <label>
-                                    "Guest: "
-                                    <select
-                                        prop:value=move || award_guest_id.get().to_string()
-                                        on:change=move |ev| {
-                                            award_guest_id
-                                                .set(event_target_value(&ev).parse().unwrap_or(0))
-                                        }
-                                    >
-                                        <option value="0">"Select guest"</option>
-                                        <Suspense fallback=|| {
-                                            view! { <option>"Loading..."</option> }
-                                        }>
-                                            {move || {
-                                                active_guests_fetcher
-                                                    .with(|maybe_result| match maybe_result {
-                                                        Some(Ok(guests)) => {
-                                                            guests
-                                                                .iter()
-                                                                .map(|guest| {
-                                                                    view! {
-                                                                        <option value=guest
-                                                                            .id
-                                                                            .to_string()>{guest.name.clone()}</option>
-                                                                    }
-                                                                })
-                                                                .collect_view()
-                                                                .into_any()
-                                                        }
-                                                        _ => view! { <option>"Error"</option> }.into_any(),
-                                                    })
-                                            }}
-                                        </Suspense>
-                                    </select>
-                                </label>
-                                <label>
-                                    "Amount: "
-                                    <input
-                                        type="number"
-                                        prop:value=move || format!("{}", award_guest_amount.get())
-                                        on:input=move |ev| {
-                                            if let Ok(value) = event_target_value(&ev).parse::<i32>() {
-                                                award_guest_amount.set(value);
-                                            }
-                                        }
-                                    />
-                                </label>
-                                <label>
-                                    "Reason: "
-                                    <input
-                                        type="text"
-                                        prop:value=move || award_guest_reason.get()
-                                        on:input=move |ev| {
-                                            award_guest_reason.set(event_target_value(&ev))
-                                        }
-                                    />
-                                </label>
-                                <button type="submit">"Award Points"</button>
-                            </form>
-                            {move || {
-                                if !award_guest_error.get().is_empty() {
-                                    view! { <p class="error">{award_guest_error.get()}</p> }
-                                        .into_any()
-                                } else {
-                                    view! {}.into_view().into_any()
-                                }
-                            }}
-                            <h2>"Award Points to House"</h2>
-                            <form on:submit=award_house_submit>
-                                <label>
-                                    "House: "
-                                    <select
-                                        prop:value=move || award_house_id.get().to_string()
-                                        on:change=move |ev| {
-                                            award_house_id
-                                                .set(event_target_value(&ev).parse().unwrap_or(0))
-                                        }
-                                    >
-                                        <option value="0">"Select house"</option>
-                                        <Suspense fallback=|| {
-                                            view! { <option>"Loading..."</option> }
-                                        }>
-                                            {move || {
-                                                houses_fetcher
-                                                    .with(|maybe_result| match maybe_result {
-                                                        Some(Ok(houses)) => {
-                                                            houses
-                                                                .iter()
-                                                                .map(|house| {
-                                                                    view! {
-                                                                        <option value=house
-                                                                            .id
-                                                                            .to_string()>{house.name.clone()}</option>
-                                                                    }
-                                                                })
-                                                                .collect_view()
-                                                                .into_any()
-                                                        }
-                                                        _ => view! { <option>"Error"</option> }.into_any(),
-                                                    })
-                                            }}
-                                        </Suspense>
-                                    </select>
-                                </label>
-                                <label>
-                                    "Amount: "
-                                    <input
-                                        type="number"
-                                        prop:value=move || format!("{}", award_house_amount.get())
-                                        on:input=move |ev| {
-                                            if let Ok(value) = event_target_value(&ev).parse::<i32>() {
-                                                award_house_amount.set(value);
-                                            }
-                                        }
-                                    />
-                                </label>
-                                <label>
-                                    "Reason: "
-                                    <input
-                                        prop:value=move || award_house_reason.get()
-                                        type="test"
-                                        on:input=move |ev| {
-                                            award_house_reason.set(event_target_value(&ev))
-                                        }
-                                    />
-                                </label>
-                                <button type="submit">"Award Points"</button>
-                            </form>
-                            {move || {
-                                if !award_house_error.get().is_empty() {
-                                    view! { <p class="error">{award_house_error.get()}</p> }
-                                        .into_any()
-                                } else {
-                                    view! {}.into_view().into_any()
-                                }
-                            }}
-
-                            <h2>"Active Guests"</h2>
-                            <table>
-                                <tbody>
-                                    <tr>
-                                        <th>"ID"</th>
-                                        <th>"Name"</th>
-                                        <th>"House"</th>
-                                        <th>"Score"</th>
-                                        <th>"Actions"</th>
-                                    </tr>
-                                    <Suspense fallback=|| {
+                            <section class="admin-section">
+                                <h2>"Register New Guest"</h2>
+                                <form class="admin-form" on:submit=register_submit>
+                                    <div class="form-group">
+                                        <label>
+                                            "Guest: "
+                                            <select
+                                                class="form-select"
+                                                prop:value=move || selected_guest_id.get().to_string()
+                                                on:change=move |ev| {
+                                                    selected_guest_id
+                                                        .set(event_target_value(&ev).parse().unwrap_or(0))
+                                                }
+                                            >
+                                                <option value="0">"Select guest"</option>
+                                                <Suspense fallback=|| {
+                                                    view! { <option>"Loading..."</option> }
+                                                }>
+                                                    {move || {
+                                                        unregistered_guests_fetcher
+                                                            .with(|maybe_result| match maybe_result {
+                                                                Some(Ok(guests)) => {
+                                                                    let mut sorted_guests = guests.clone();
+                                                                    sorted_guests
+                                                                        .sort_by(|a, b| {
+                                                                            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                                                                        });
+                                                                    sorted_guests
+                                                                        .iter()
+                                                                        .map(|guest| {
+                                                                            view! {
+                                                                                <option value=guest
+                                                                                    .id
+                                                                                    .to_string()>{guest.name.clone()}</option>
+                                                                            }
+                                                                        })
+                                                                        .collect_view()
+                                                                        .into_any()
+                                                                }
+                                                                _ => view! { <option>"Error"</option> }.into_any(),
+                                                            })
+                                                    }}
+                                                </Suspense>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "Character: "
+                                            <input
+                                                class="form-input"
+                                                type="text"
+                                                placeholder="e.g., Harry Potter"
+                                                prop:value=move || new_guest_character.get()
+                                                on:input=move |ev| {
+                                                    new_guest_character.set(event_target_value(&ev))
+                                                }
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "House: "
+                                            <select
+                                                class="form-select"
+                                                prop:value=move || new_guest_house.get().to_string()
+                                                on:change=move |ev| {
+                                                    new_guest_house
+                                                        .set(event_target_value(&ev).parse().unwrap_or(1))
+                                                }
+                                            >
+                                                <option value="0">"Sorting Hat"</option>
+                                                <Suspense fallback=|| {
+                                                    view! { <option>"Loading..."</option> }
+                                                }>
+                                                    {move || {
+                                                        houses_fetcher
+                                                            .with(|maybe_result| match maybe_result {
+                                                                Some(Ok(houses)) => {
+                                                                    houses
+                                                                        .iter()
+                                                                        .map(|house| {
+                                                                            view! {
+                                                                                <option value=house
+                                                                                    .id
+                                                                                    .to_string()>{house.name.clone()}</option>
+                                                                            }
+                                                                        })
+                                                                        .collect_view()
+                                                                        .into_any()
+                                                                }
+                                                                _ => view! { <option>"Error"</option> }.into_any(),
+                                                            })
+                                                    }}
+                                                </Suspense>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <button type="submit" class="btn-primary">
+                                        "Sort"
+                                    </button>
+                                </form>
+                                {move || {
+                                    if !register_error.get().is_empty() {
+                                        view! { <p class="error">{register_error.get()}</p> }
+                                            .into_any()
+                                    } else {
+                                        view! {}.into_any()
+                                    }
+                                }}
+                                {move || {
+                                    if !registered_token.get().is_empty() {
                                         view! {
-                                            <tr>
-                                                <td colspan="5">"Loading..."</td>
-                                            </tr>
+                                            <p class="token-display">
+                                                "Token: " {registered_token.get()}
+                                            </p>
                                         }
-                                    }>
-                                        {move || {
-                                            active_guests_fetcher
-                                                .with(|maybe_result| match maybe_result {
-                                                    Some(Ok(guests)) => {
-                                                        if guests.is_empty() {
-                                                            return view! {
-                                                                <tr>
-                                                                    <td colspan="5">"No active guests"</td>
-                                                                </tr>
-                                                            }
-                                                                .into_any();
-                                                        }
-                                                        guests
-                                                            .iter()
-                                                            .map(|guest| {
-                                                                let id = guest.id;
-                                                                view! {
-                                                                    <tr>
-                                                                        <td>{format!("{}", guest.id)}</td>
-                                                                        <td>{guest.name.clone()}</td>
-                                                                        <td>
-                                                                            {houses_fetcher
-                                                                                .with(|maybe_result| {
-                                                                                    maybe_result
-                                                                                        .as_ref()
-                                                                                        .and_then(|result| result.as_ref().ok())
-                                                                                        .and_then(|houses| {
-                                                                                            houses.iter().find(|house| Some(house.id) == guest.house_id)
-                                                                                        })
-                                                                                        .map(|house| house.name.clone())
-                                                                                        .unwrap_or_else(|| "Unknown".to_string())
-                                                                                })}
-                                                                        </td>
-                                                                        <td>{format!("{}", guest.personal_score)}</td>
-                                                                        <td>
-                                                                            <button on:click=move |_| show_token(
-                                                                                id,
-                                                                            )>"Show token"</button>
-                                                                            <button on:click=move |_| unregister(
-                                                                                id,
-                                                                            )>"Unregister"</button>
-                                                                        </td>
-                                                                    </tr>
-                                                                }
-                                                            })
-                                                            .collect_view()
-                                                            .into_any()
-                                                    }
-                                                    _ => {
-                                                        view! {
-                                                            <tr>
-                                                                <td colspan="5">"Loading..."</td>
-                                                            </tr>
-                                                        }
-                                                            .into_view()
-                                                            .into_any()
-                                                    }
-                                                })
-                                        }}
-                                    </Suspense>
-                                </tbody>
-                            </table>
+                                            .into_any()
+                                    } else {
+                                        view! {}.into_any()
+                                    }
+                                }}
+                            </section>
 
-                            <h2>"Point Awards History"</h2>
-                            <table>
-                                <tbody>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th>Guest</th>
-                                        <th>House</th>
-                                        <th>Amount</th>
-                                        <th>Reason</th>
-                                        <th>Time</th>
-                                    </tr>
-                                    <Suspense>
-                                        {move || {
-                                            point_awards_fetcher
-                                                .with(|maybe_result| match maybe_result {
-                                                    Some(Ok(awards)) => {
-                                                        awards
-                                                            .iter()
-                                                            .map(|award| {
+                            <section class="admin-section">
+                                <h2>"Award Points to Guest"</h2>
+                                <form class="admin-form" on:submit=award_guest_submit>
+                                    <div class="form-group">
+                                        <label>
+                                            "Guest: "
+                                            <select
+                                                class="form-select"
+                                                prop:value=move || award_guest_id.get().to_string()
+                                                on:change=move |ev| {
+                                                    award_guest_id
+                                                        .set(event_target_value(&ev).parse().unwrap_or(0))
+                                                }
+                                            >
+                                                <option value="0">"Select guest"</option>
+                                                <Suspense fallback=|| {
+                                                    view! { <option>"Loading..."</option> }
+                                                }>
+                                                    {move || {
+                                                        active_guests_fetcher
+                                                            .with(|maybe_result| match maybe_result {
+                                                                Some(Ok(guests)) => {
+                                                                    guests
+                                                                        .iter()
+                                                                        .map(|guest| {
+                                                                            view! {
+                                                                                <option value=guest
+                                                                                    .id
+                                                                                    .to_string()>{guest.name.clone()}</option>
+                                                                            }
+                                                                        })
+                                                                        .collect_view()
+                                                                        .into_any()
+                                                                }
+                                                                _ => view! { <option>"Error"</option> }.into_any(),
+                                                            })
+                                                    }}
+                                                </Suspense>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "Amount: "
+                                            <input
+                                                class="form-input"
+                                                type="number"
+                                                prop:value=move || format!("{}", award_guest_amount.get())
+                                                on:input=move |ev| {
+                                                    if let Ok(value) = event_target_value(&ev).parse::<i32>() {
+                                                        award_guest_amount.set(value);
+                                                    }
+                                                }
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "Reason: "
+                                            <input
+                                                class="form-input"
+                                                type="text"
+                                                prop:value=move || award_guest_reason.get()
+                                                on:input=move |ev| {
+                                                    award_guest_reason.set(event_target_value(&ev))
+                                                }
+                                            />
+                                        </label>
+                                    </div>
+                                    <button type="submit" class="btn-primary">
+                                        "Award Points"
+                                    </button>
+                                </form>
+                                {move || {
+                                    if !award_guest_error.get().is_empty() {
+                                        view! { <p class="error">{award_guest_error.get()}</p> }
+                                            .into_any()
+                                    } else {
+                                        view! {}.into_view().into_any()
+                                    }
+                                }}
+                            </section>
+
+                            <section class="admin-section">
+                                <h2>"Award Points to House"</h2>
+                                <form class="admin-form" on:submit=award_house_submit>
+                                    <div class="form-group">
+                                        <label>
+                                            "House: "
+                                            <select
+                                                class="form-select"
+                                                prop:value=move || award_house_id.get().to_string()
+                                                on:change=move |ev| {
+                                                    award_house_id
+                                                        .set(event_target_value(&ev).parse().unwrap_or(0))
+                                                }
+                                            >
+                                                <option value="0">"Select house"</option>
+                                                <Suspense fallback=|| {
+                                                    view! { <option>"Loading..."</option> }
+                                                }>
+                                                    {move || {
+                                                        houses_fetcher
+                                                            .with(|maybe_result| match maybe_result {
+                                                                Some(Ok(houses)) => {
+                                                                    houses
+                                                                        .iter()
+                                                                        .map(|house| {
+                                                                            view! {
+                                                                                <option value=house
+                                                                                    .id
+                                                                                    .to_string()>{house.name.clone()}</option>
+                                                                            }
+                                                                        })
+                                                                        .collect_view()
+                                                                        .into_any()
+                                                                }
+                                                                _ => view! { <option>"Error"</option> }.into_any(),
+                                                            })
+                                                    }}
+                                                </Suspense>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "Amount: "
+                                            <input
+                                                class="form-input"
+                                                type="number"
+                                                prop:value=move || format!("{}", award_house_amount.get())
+                                                on:input=move |ev| {
+                                                    if let Ok(value) = event_target_value(&ev).parse::<i32>() {
+                                                        award_house_amount.set(value);
+                                                    }
+                                                }
+                                            />
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "Reason: "
+                                            <input
+                                                class="form-input"
+                                                prop:value=move || award_house_reason.get()
+                                                type="text"
+                                                on:input=move |ev| {
+                                                    award_house_reason.set(event_target_value(&ev))
+                                                }
+                                            />
+                                        </label>
+                                    </div>
+                                    <button type="submit" class="btn-primary">
+                                        "Award Points"
+                                    </button>
+                                </form>
+                                {move || {
+                                    if !award_house_error.get().is_empty() {
+                                        view! { <p class="error">{award_house_error.get()}</p> }
+                                            .into_any()
+                                    } else {
+                                        view! {}.into_view().into_any()
+                                    }
+                                }}
+                            </section>
+
+                            <section class="admin-section">
+                                <h2>"Active Guests"</h2>
+                                <div class="table-responsive">
+                                    <table class="admin-table">
+                                        <tbody>
+                                            <tr>
+                                                <th>"ID"</th>
+                                                <th>"Name"</th>
+                                                <th>"House"</th>
+                                                <th>"Score"</th>
+                                                <th>"Actions"</th>
+                                            </tr>
+                                            <Suspense fallback=|| {
+                                                view! {
+                                                    <tr>
+                                                        <td colspan="5">"Loading..."</td>
+                                                    </tr>
+                                                }
+                                            }>
+                                                {move || {
+                                                    active_guests_fetcher
+                                                        .with(|maybe_result| match maybe_result {
+                                                            Some(Ok(guests)) => {
+                                                                if guests.is_empty() {
+                                                                    return view! {
+                                                                        <tr>
+                                                                            <td colspan="5">"No active guests"</td>
+                                                                        </tr>
+                                                                    }
+                                                                        .into_any();
+                                                                }
+                                                                guests
+                                                                    .iter()
+                                                                    .map(|guest| {
+                                                                        let id = guest.id;
+                                                                        view! {
+                                                                            <tr>
+                                                                                <td>{format!("{}", guest.id)}</td>
+                                                                                <td>{guest.name.clone()}</td>
+                                                                                <td>
+                                                                                    {houses_fetcher
+                                                                                        .with(|maybe_result| {
+                                                                                            maybe_result
+                                                                                                .as_ref()
+                                                                                                .and_then(|result| result.as_ref().ok())
+                                                                                                .and_then(|houses| {
+                                                                                                    houses.iter().find(|house| Some(house.id) == guest.house_id)
+                                                                                                })
+                                                                                                .map(|house| house.name.clone())
+                                                                                                .unwrap_or_else(|| "Unknown".to_string())
+                                                                                        })}
+                                                                                </td>
+                                                                                <td>{format!("{}", guest.personal_score)}</td>
+                                                                                <td>
+                                                                                    <button
+                                                                                        class="btn-secondary"
+                                                                                        on:click=move |_| show_token(id)
+                                                                                    >
+                                                                                        "Show token"
+                                                                                    </button>
+                                                                                    <button class="btn-danger" on:click=move |_| unregister(id)>
+                                                                                        "Unregister"
+                                                                                    </button>
+                                                                                </td>
+                                                                            </tr>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()
+                                                                    .into_any()
+                                                            }
+                                                            _ => {
                                                                 view! {
                                                                     <tr>
-                                                                        <td>{award.id}</td>
-                                                                        <td>
-                                                                            {award.guest_name.clone().unwrap_or("N/A".to_string())}
-                                                                        </td>
-                                                                        <td>
-                                                                            {award.house_name.clone().unwrap_or("N/A".to_string())}
-                                                                        </td>
-                                                                        <td>{award.amount}</td>
-                                                                        <td>{award.reason.clone()}</td>
-                                                                        <td>{award.awarded_at.to_string()}</td>
+                                                                        <td colspan="5">"Loading..."</td>
                                                                     </tr>
                                                                 }
-                                                            })
-                                                            .collect_view()
-                                                            .into_any()
-                                                    }
-                                                    _ => view! {}.into_view().into_any(),
-                                                })
-                                        }}
-                                    </Suspense>
-                                </tbody>
-                            </table>
+                                                                    .into_view()
+                                                                    .into_any()
+                                                            }
+                                                        })
+                                                }}
+                                            </Suspense>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+
+                            <section class="admin-section">
+                                <h2>"Point Awards History"</h2>
+                                <div class="table-responsive">
+                                    <table class="admin-table">
+                                        <tbody>
+                                            <tr>
+                                                <th>ID</th>
+                                                <th>Guest</th>
+                                                <th>House</th>
+                                                <th>Amount</th>
+                                                <th>Reason</th>
+                                                <th>Time</th>
+                                            </tr>
+                                            <Suspense>
+                                                {move || {
+                                                    point_awards_fetcher
+                                                        .with(|maybe_result| match maybe_result {
+                                                            Some(Ok(awards)) => {
+                                                                awards
+                                                                    .iter()
+                                                                    .map(|award| {
+                                                                        view! {
+                                                                            <tr>
+                                                                                <td>{award.id}</td>
+                                                                                <td>
+                                                                                    {award.guest_name.clone().unwrap_or("N/A".to_string())}
+                                                                                </td>
+                                                                                <td>
+                                                                                    {award.house_name.clone().unwrap_or("N/A".to_string())}
+                                                                                </td>
+                                                                                <td>{award.amount}</td>
+                                                                                <td>{award.reason.clone()}</td>
+                                                                                <td>{award.awarded_at.to_string()}</td>
+                                                                            </tr>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()
+                                                                    .into_any()
+                                                            }
+                                                            _ => view! {}.into_view().into_any(),
+                                                        })
+                                                }}
+                                            </Suspense>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
                         </div>
                     }
                         .into_any()
