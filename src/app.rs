@@ -240,7 +240,8 @@ pub async fn register_guest_handler(
         let mut conn = pool
             .get()
             .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        let (_, token) = register_guest(&mut conn, guest_id, house_id, &character)
+        let effective_house_id = if house_id == 0 { None } else { Some(house_id) };
+        let (_, token) = register_guest(&mut conn, guest_id, effective_house_id, &character)
             .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
         Ok(token)
     })
@@ -732,7 +733,7 @@ fn AdminDashboard() -> impl IntoView {
     // Signals related to registering a new guest.
     let selected_guest_id = RwSignal::new(0i32);
     let new_guest_character = RwSignal::new(String::new());
-    let new_guest_house = RwSignal::new(1i32);
+    let new_guest_house = RwSignal::new(0i32);
     let register_error = RwSignal::new(String::new());
     let registered_token = RwSignal::new(String::new());
 
@@ -941,6 +942,7 @@ fn AdminDashboard() -> impl IntoView {
                                                 .set(event_target_value(&ev).parse().unwrap_or(1))
                                         }
                                     >
+                                        <option value="0">"Sorting Hat"</option>
                                         <Suspense fallback=|| {
                                             view! { <option>"Loading..."</option> }
                                         }>
@@ -966,7 +968,7 @@ fn AdminDashboard() -> impl IntoView {
                                         </Suspense>
                                     </select>
                                 </label>
-                                <button type="submit">"Register & Generate Token"</button>
+                                <button type="submit">"Sort"</button>
                             </form>
                             {move || {
                                 if !register_error.get().is_empty() {

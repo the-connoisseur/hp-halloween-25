@@ -13,6 +13,8 @@ use diesel::prelude::*;
 use diesel::SqliteConnection;
 #[cfg(feature = "ssr")]
 use dotenvy::dotenv;
+use rand::distr::weighted::WeightedIndex;
+use rand::prelude::*;
 #[cfg(feature = "ssr")]
 use std::env;
 use std::io::{Error as IoError, ErrorKind};
@@ -63,7 +65,7 @@ pub fn establish_connection() -> SqliteConnection {
 pub fn register_guest(
     conn: &mut SqliteConnection,
     guest_id: i32,
-    house_id: i32,
+    house_id: Option<i32>,
     character: &str,
 ) -> Result<(Guest, String), diesel::result::Error> {
     conn.transaction(|conn| {
@@ -77,20 +79,93 @@ pub fn register_guest(
                 IoError::new(ErrorKind::Other, "Guest already active"),
             )));
         }
-        // Validate house exists.
-        let house_exists: i64 = houses::table
-            .filter(houses::id.eq(house_id))
-            .count()
-            .get_result(conn)?;
-        if house_exists == 0 {
-            return Err(diesel::result::Error::NotFound);
-        }
+
+        let final_house_id = if let Some(provided_house_id) = house_id {
+            let house_exists: i64 = houses::table
+                .filter(houses::id.eq(provided_house_id))
+                .count()
+                .get_result(conn)?;
+            if house_exists == 0 {
+                return Err(diesel::result::Error::NotFound);
+            }
+            provided_house_id
+        } else {
+            // Assert that we're working with 37 guests, for simplicity.
+            let total_guests: i64 = guests::table.count().get_result(conn)?;
+            if total_guests != 37 {
+                return Err(diesel::result::Error::QueryBuilderError(Box::new(
+                    IoError::new(
+                        ErrorKind::Other,
+                        "Expected exactly 37 guests in the database",
+                    ),
+                )));
+            }
+
+            // Based on how many have been sorted, determine how many we're targeting in each
+            // house.
+            let sorted_so_far: i64 = guests::table
+                .filter(guests::is_active.eq(1i32))
+                .count()
+                .get_result(conn)?;
+            let targets: Vec<i64> = if sorted_so_far < 18 {
+                vec![4, 5, 5, 4]
+            } else {
+                vec![10, 9, 9, 9]
+            };
+
+            // Load the house ids in order.
+            let house_ids: Vec<i32> = houses::table
+                .select(houses::id)
+                .order(houses::id.asc())
+                .load(conn)?;
+            if house_ids.len() != 4 {
+                return Err(diesel::result::Error::QueryBuilderError(Box::new(
+                    IoError::new(ErrorKind::Other, "Expected exactly 4 houses"),
+                )));
+            }
+
+            // Compute current counts for each house, and subsequently, the remaining spots in each
+            // house.
+            let mut current_counts: Vec<i64> = Vec::new();
+            for &house_id in &house_ids {
+                let count: i64 = guests::table
+                    .filter(guests::is_active.eq(1i32))
+                    .filter(guests::house_id.eq(Some(house_id)))
+                    .count()
+                    .get_result(conn)?;
+                current_counts.push(count);
+            }
+            let remainings: Vec<i64> = targets
+                .iter()
+                .zip(current_counts.iter())
+                .map(|(&target, &current)| (target - current).max(0))
+                .collect();
+
+            // Create a distribution of the houses weighted by the number of spots left in each
+            // house.
+            let dist = WeightedIndex::new(
+                remainings
+                    .iter()
+                    .map(|&w| w as usize)
+                    .collect::<Vec<usize>>(),
+            )
+            .map_err(|e| {
+                diesel::result::Error::QueryBuilderError(Box::new(IoError::new(
+                    ErrorKind::Other,
+                    format!("WeightedIndex error: {}", e),
+                )))
+            })?;
+
+            // Sample the house id randomly from that distribution.
+            let mut rng = rand::rng();
+            house_ids[dist.sample(&mut rng)]
+        };
 
         // Update the guest: set house, character, registered_at, and activate.
         let now = Utc::now().naive_utc();
         diesel::update(guests::table.filter(guests::id.eq(guest_id)))
             .set((
-                guests::house_id.eq(Some(house_id)),
+                guests::house_id.eq(Some(final_house_id)),
                 guests::character.eq(Some(character.to_string())),
                 guests::registered_at.eq(Some(now)),
                 guests::is_active.eq(1i32),
@@ -525,7 +600,7 @@ mod tests {
             assert!(initial_guest.registered_at.is_none());
 
             // Now register.
-            let (guest, token) = register_guest(conn, inserted_id, 1, "Harry Potter")?;
+            let (guest, token) = register_guest(conn, inserted_id, Some(1i32), "Harry Potter")?;
             assert_eq!(guest.id, inserted_id);
             assert_eq!(guest.name, "Test Guest");
             assert_eq!(guest.house_id, Some(1));
@@ -547,12 +622,12 @@ mod tests {
             assert_eq!(session_count, 1);
 
             // Try registering again (should fail).
-            let err = register_guest(conn, inserted_id, 2, "Hannah Abbott")
+            let err = register_guest(conn, inserted_id, Some(2i32), "Hannah Abbott")
                 .expect_err("Should fail as already active");
             assert!(matches!(err, diesel::result::Error::QueryBuilderError(_)));
 
             // Try non-existent guest.
-            let err = register_guest(conn, 999, 1, "Ron Weasley")
+            let err = register_guest(conn, 999, Some(1i32), "Ron Weasley")
                 .expect_err("Should fail as non-existent guest");
             assert!(matches!(err, diesel::result::Error::NotFound));
 
@@ -575,7 +650,7 @@ mod tests {
                 .get_result(conn)?;
 
             // Register a guest.
-            let (guest, token) = register_guest(conn, inserted_id, 3, "Padma Patil")
+            let (guest, token) = register_guest(conn, inserted_id, Some(3i32), "Padma Patil")
                 .expect("Failed to register guest");
 
             // Get by token.
@@ -606,7 +681,7 @@ mod tests {
                 .get_result(conn)?;
 
             // Register a guest.
-            let (guest, _) = register_guest(conn, inserted_id, 3, "Terry Boot")
+            let (guest, _) = register_guest(conn, inserted_id, Some(3i32), "Terry Boot")
                 .expect("Failed to register guest");
 
             // Unregister the guest.
@@ -660,7 +735,7 @@ mod tests {
                 .get_result(conn)?;
 
             // Register, then unregister a guest.
-            let (guest, _) = register_guest(conn, inserted_id, 4, "Draco Malfoy")
+            let (guest, _) = register_guest(conn, inserted_id, Some(4i32), "Draco Malfoy")
                 .expect("Failed to register guest");
             unregister_guest(conn, guest.id).expect("Failed to unregister guest");
 
@@ -732,7 +807,7 @@ mod tests {
                 .get_result(conn)?;
 
             // Register a guest with Gryffindor.
-            let (guest, _) = register_guest(conn, inserted_id, 1, "Hagrid")?;
+            let (guest, _) = register_guest(conn, inserted_id, Some(1i32), "Hagrid")?;
             let guest_id = guest.id;
 
             // Read the guest details and verify that they are correct.
@@ -788,9 +863,9 @@ mod tests {
                 .get_result(conn)?;
 
             // Register 3 guests - 2 in Gryffindor and 1 in Slytherin.
-            let (lavender, _) = register_guest(conn, id_1, 1, "Lavender Brown")?;
-            let (parvati, _) = register_guest(conn, id_2, 1, "Parvati Patil")?;
-            let (pansy, _) = register_guest(conn, id_3, 4, "Pansy Parkinson")?;
+            let (lavender, _) = register_guest(conn, id_1, Some(1i32), "Lavender Brown")?;
+            let (parvati, _) = register_guest(conn, id_2, Some(1i32), "Parvati Patil")?;
+            let (pansy, _) = register_guest(conn, id_3, Some(4i32), "Pansy Parkinson")?;
 
             // Award points to first Gryffindor guest, and verify the contents of the returned value.
             let award = award_points_to_guest(conn, lavender.id, 10, "Game win")?;
@@ -926,8 +1001,8 @@ mod tests {
             assert_eq!(active.len(), 0);
 
             // Register some guests.
-            register_guest(conn, id_1, 1, "Seamus Finnigan")?;
-            register_guest(conn, id_2, 2, "Justin Finch-Fletchley")?;
+            register_guest(conn, id_1, Some(1i32), "Seamus Finnigan")?;
+            register_guest(conn, id_2, Some(2i32), "Justin Finch-Fletchley")?;
 
             let active = get_all_active_guests(conn)?;
             assert_eq!(active.len(), 2);
@@ -962,8 +1037,8 @@ mod tests {
                 .get_result(conn)?;
 
             // Register some guests and award points.
-            let (guest_1, _) = register_guest(conn, id_1, 1, "Vincent Crabbe")?;
-            let (guest_2, _) = register_guest(conn, id_2, 2, "Gregory Goyle")?;
+            let (guest_1, _) = register_guest(conn, id_1, Some(1i32), "Vincent Crabbe")?;
+            let (guest_2, _) = register_guest(conn, id_2, Some(2i32), "Gregory Goyle")?;
             award_points_to_guest(conn, guest_1.id, 10, "Guest 1 award")?;
             award_points_to_guest(conn, guest_2.id, 20, "Guest 2 award")?;
             award_points_to_house(conn, 1, 15, "House award")?;
@@ -1070,7 +1145,7 @@ mod tests {
                 .get_result(conn)?;
 
             // Register a guest.
-            let (guest, _) = register_guest(conn, inserted_id, 1, "Bill Weasley")?;
+            let (guest, _) = register_guest(conn, inserted_id, Some(1i32), "Bill Weasley")?;
 
             // Get the token.
             let token_opt = get_guest_token(conn, guest.id)?;
@@ -1124,7 +1199,7 @@ mod tests {
                 .returning(guests::id)
                 .get_result(conn)?;
 
-            let (guest, _) = register_guest(conn, inserted_id, 1, "Neville Longbottom")?;
+            let (guest, _) = register_guest(conn, inserted_id, Some(1i32), "Neville Longbottom")?;
             let award = award_points_to_guest(conn, guest.id, 10, "No reason")?;
 
             let awards = get_all_point_awards(conn)?;
@@ -1183,12 +1258,12 @@ mod tests {
                 .returning(guests::id)
                 .get_result(conn)?;
 
-            let (guest_1, _) = register_guest(conn, id_1, 1, "Fred Weasley")?;
+            let (guest_1, _) = register_guest(conn, id_1, Some(1i32), "Fred Weasley")?;
             award_points_to_guest(conn, guest_1.id, 10, "First")?;
             std::thread::sleep(std::time::Duration::from_millis(1));
             award_points_to_house(conn, 4, 5, "Second")?;
             std::thread::sleep(std::time::Duration::from_millis(1));
-            let (guest_2, _) = register_guest(conn, id_2, 3, "George Weasley")?;
+            let (guest_2, _) = register_guest(conn, id_2, Some(3i32), "George Weasley")?;
             award_points_to_guest(conn, guest_2.id, 5, "Third")?;
             std::thread::sleep(std::time::Duration::from_millis(1));
             award_points_to_guest(conn, guest_1.id, 20, "Fourth")?;
