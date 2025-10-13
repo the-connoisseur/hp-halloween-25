@@ -1,4 +1,5 @@
-// @generated automatically by Diesel CLI, then modified by hand to remove Nullable everywhere.
+// @generated automatically by Diesel CLI, then modified by hand to remove Nullable almost
+// everywhere.
 
 diesel::table! {
     admin_sessions (id) {
@@ -13,10 +14,11 @@ diesel::table! {
     guests (id) {
         id -> Integer,
         name -> Text,
-        house_id -> Integer,
+        house_id -> Nullable<Integer>,
         personal_score -> Integer,
         is_active -> Integer,
-        created_at -> Timestamp,
+        registered_at -> Nullable<Timestamp>,
+        character -> Nullable<Text>,
     }
 }
 

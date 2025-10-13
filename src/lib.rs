@@ -15,6 +15,7 @@ use diesel::SqliteConnection;
 use dotenvy::dotenv;
 #[cfg(feature = "ssr")]
 use std::env;
+use std::io::{Error as IoError, ErrorKind};
 #[cfg(feature = "ssr")]
 use uuid::Uuid;
 
@@ -44,7 +45,8 @@ pub fn establish_connection() -> SqliteConnection {
     // Enable WAL mode to allow concurrent reads during writes, and a timeout to retry locked
     // operations.
     conn.batch_execute(
-        "PRAGMA journal_mode = WAL; \
+        "PRAGMA foreign_keys = ON; \
+        PRAGMA journal_mode = WAL; \
         PRAGMA synchronous = NORMAL; \
         PRAGMA busy_timeout = 10000;",
     )
@@ -53,15 +55,28 @@ pub fn establish_connection() -> SqliteConnection {
     conn
 }
 
-/// Registers a new guest, assigns them to a house, and generates a session token.
-/// Returns the guest and token string.
+/// Registers a guest by ID (prepopulated unregistered guest), assigns them to a house, sets their
+/// character, sets registered_at to now, activates them, and generates a session token.
+/// Errors if guest doesn't exist or is already active.
+/// Returns the updated guest and token string.
 #[cfg(feature = "ssr")]
 pub fn register_guest(
     conn: &mut SqliteConnection,
-    name: &str,
+    guest_id: i32,
     house_id: i32,
+    character: &str,
 ) -> Result<(Guest, String), diesel::result::Error> {
     conn.transaction(|conn| {
+        // Fetch the existing guest and ensure it's inactive.
+        let existing_guest: Guest = guests::table
+            .filter(guests::id.eq(guest_id))
+            .select(Guest::as_select())
+            .first(conn)?;
+        if existing_guest.is_active == 1 {
+            return Err(diesel::result::Error::QueryBuilderError(Box::new(
+                IoError::new(ErrorKind::Other, "Guest already active"),
+            )));
+        }
         // Validate house exists.
         let house_exists: i64 = houses::table
             .filter(houses::id.eq(house_id))
@@ -71,16 +86,23 @@ pub fn register_guest(
             return Err(diesel::result::Error::NotFound);
         }
 
-        // Insert guest and get the new ID..
-        let new_guest = NewGuest { name, house_id };
-        let inserted_id: i32 = diesel::insert_into(guests::table)
-            .values(&new_guest)
-            .returning(guests::id)
-            .get_result(conn)?;
+        // Update the guest: set house, character, registered_at, and activate.
+        let now = Utc::now().naive_utc();
+        diesel::update(guests::table.filter(guests::id.eq(guest_id)))
+            .set((
+                guests::house_id.eq(Some(house_id)),
+                guests::character.eq(Some(character.to_string())),
+                guests::registered_at.eq(Some(now)),
+                guests::is_active.eq(1i32),
+            ))
+            .execute(conn)?;
 
-        // Fetch the full inserted guest.
+        // Delete any old sessions (though unlikely for inactive).
+        diesel::delete(sessions::table.filter(sessions::guest_id.eq(guest_id))).execute(conn)?;
+
+        // Fetch the updated guest.
         let guest: Guest = guests::table
-            .find(inserted_id)
+            .filter(guests::id.eq(guest_id))
             .select(Guest::as_select())
             .first(conn)?;
 
@@ -121,6 +143,17 @@ pub fn get_guest_by_token(
     guest.ok_or(diesel::result::Error::NotFound)
 }
 
+/// Retrieves all unregistered (inactive) guests.
+#[cfg(feature = "ssr")]
+pub fn get_all_unregistered_guests(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<Guest>, diesel::result::Error> {
+    guests::table
+        .filter(guests::is_active.eq(0i32))
+        .select(Guest::as_select())
+        .load(conn)
+}
+
 /// Unregisters a guest, deletes sessions associated with that guest.
 /// Returns number of affected rows.
 #[cfg(feature = "ssr")]
@@ -135,8 +168,8 @@ pub fn unregister_guest(
         .execute(conn)
 }
 
-/// Reregisters a guest: Reactivates them, optionally changes house, deletes old session (if any),
-/// and generates a new token.
+/// Reregisters a guest: Reactivates them, optionally changes house and character, updates registered_at,
+/// deletes old session (if any), and generates a new token.
 /// Returns updated guest and new token if an entry for this guest already exists, or NotFound
 /// error otherwise.
 #[cfg(feature = "ssr")]
@@ -144,6 +177,7 @@ pub fn reregister_guest(
     conn: &mut SqliteConnection,
     guest_id: i32,
     new_house_id: Option<i32>,
+    new_character: Option<&str>,
 ) -> Result<(Guest, String), diesel::result::Error> {
     conn.transaction(|conn| {
         // Fetch guest entry if it exists.
@@ -167,14 +201,26 @@ pub fn reregister_guest(
                 return Err(diesel::result::Error::NotFound);
             }
             diesel::update(guests::table.filter(guests::id.eq(guest_id)))
-                .set(guests::house_id.eq(house_id))
+                .set(guests::house_id.eq(Some(house_id)))
                 .execute(conn)?;
-            guest.house_id = house_id;
+            guest.house_id = Some(house_id);
         }
 
-        // Reactivate.
+        // Update the character if provided.
+        if let Some(char_name) = new_character {
+            diesel::update(guests::table.filter(guests::id.eq(guest_id)))
+                .set(guests::character.eq(Some(char_name.to_string())))
+                .execute(conn)?;
+            guest.character = Some(char_name.to_string());
+        }
+
+        // Reactivate and update registered_at to now.
+        let now = Utc::now().naive_utc();
         diesel::update(guests::table.filter(guests::id.eq(guest_id)))
-            .set(guests::is_active.eq(1i32))
+            .set((
+                guests::is_active.eq(1i32),
+                guests::registered_at.eq(Some(now)),
+            ))
             .execute(conn)?;
 
         // Delete old session.
@@ -211,11 +257,20 @@ pub fn award_points_to_guest(
     reason: &str,
 ) -> Result<PointAward, diesel::result::Error> {
     conn.transaction(|conn| {
-        // First fetch the guest and their house from the database.
-        let (guest, house): (Guest, House) = guests::table
+        // Fetch the active guest first.
+        let guest: Guest = guests::table
             .filter(guests::id.eq(guest_id))
-            .inner_join(houses::table.on(guests::house_id.eq(houses::id)))
-            .select((Guest::as_select(), House::as_select()))
+            .filter(guests::is_active.eq(1i32))
+            .select(Guest::as_select())
+            .first(conn)?;
+
+        // Ensure the guest has a house assigned (for active guests).
+        let house_id = guest.house_id.ok_or(diesel::result::Error::NotFound)?;
+
+        // Fetch the house.
+        let house: House = houses::table
+            .filter(houses::id.eq(house_id))
+            .select(House::as_select())
             .first(conn)?;
 
         // Update the guest's personal score.
@@ -346,18 +401,30 @@ pub fn get_all_houses(conn: &mut SqliteConnection) -> Result<Vec<House>, diesel:
         .load(conn)
 }
 
-/// Fetches a guest's details, including their house.
+/// Fetches a guest's details. Assumes the guest is active and has been sorted already. Returns an
+/// error otherwise.
 #[cfg(feature = "ssr")]
 pub fn get_guest_details(
     conn: &mut SqliteConnection,
     guest_id: i32,
 ) -> Result<(Guest, House), diesel::result::Error> {
-    guests::table
+    // Fetch the active guest first.
+    let guest: Guest = guests::table
         .filter(guests::id.eq(guest_id))
-        .inner_join(houses::table.on(guests::house_id.eq(houses::id)))
         .filter(guests::is_active.eq(1i32))
-        .select((Guest::as_select(), House::as_select()))
-        .first(conn)
+        .select(Guest::as_select())
+        .first(conn)?;
+
+    // Ensure the guest has a house assigned.
+    let house_id = guest.house_id.ok_or(diesel::result::Error::NotFound)?;
+
+    // Fetch the house.
+    let house: House = houses::table
+        .filter(houses::id.eq(house_id))
+        .select(House::as_select())
+        .first(conn)?;
+
+    Ok((guest, house))
 }
 
 /// Retrieves all active guests.
@@ -371,20 +438,34 @@ pub fn get_all_active_guests(
         .load(conn)
 }
 
-/// Clears all guests from the database, along with their associated sessions and guest-specific
-/// point awards. This does not affect house-specific point awards or house scores.
+/// Resets the entire database to its initial state: deactivates all guests, clears their scores,
+/// characters, registration timestamps, and house assignments; resets house scores to zero;
+/// deletes all sessions (guest and admin) and all point award entries.
 #[cfg(feature = "ssr")]
-pub fn clear_all_guests(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
+pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
     conn.transaction(|conn| {
-        // Delete all sessions.
+        // Delete all sessions (guest and admin).
         diesel::delete(sessions::table).execute(conn)?;
+        diesel::delete(admin_sessions::table).execute(conn)?;
 
-        // Delete point awards tied to guests.
-        diesel::delete(point_awards::table.filter(point_awards::guest_id.is_not_null()))
+        // Delete all point awards.
+        diesel::delete(point_awards::table).execute(conn)?;
+
+        // Reset all guests.
+        diesel::update(guests::table)
+            .set((
+                guests::is_active.eq(0i32),
+                guests::personal_score.eq(0i32),
+                guests::house_id.eq(None::<i32>),
+                guests::registered_at.eq(None::<chrono::NaiveDateTime>),
+                guests::character.eq(None::<String>),
+            ))
             .execute(conn)?;
 
-        // Delete all guests.
-        diesel::delete(guests::table).execute(conn)?;
+        // Reset all house scores to zero.
+        diesel::update(houses::table)
+            .set(houses::score.eq(0i32))
+            .execute(conn)?;
 
         Ok(())
     })
@@ -424,22 +505,56 @@ mod tests {
     #[test]
     fn test_register_guest() {
         run_test_in_transaction(|conn| {
-            // Register a guest and verify the entry.
-            let (guest, token) =
-                register_guest(conn, "Test Guest", 1).expect("Failed to register guest");
+            // First, insert an inactive guest for testing (mimicking prepopulation).
+            let new_inactive = NewGuest {
+                name: "Test Guest",
+                house_id: None,
+                character: None,
+                registered_at: None,
+            };
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&new_inactive)
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            // Verify initially no registered at.
+            let initial_guest: Guest = guests::table
+                .filter(guests::id.eq(inserted_id))
+                .select(Guest::as_select())
+                .first(conn)?;
+            assert!(initial_guest.registered_at.is_none());
+
+            // Now register.
+            let (guest, token) = register_guest(conn, inserted_id, 1, "Harry Potter")?;
+            assert_eq!(guest.id, inserted_id);
             assert_eq!(guest.name, "Test Guest");
-            assert_eq!(guest.house_id, 1);
+            assert_eq!(guest.house_id, Some(1));
+            assert_eq!(guest.character, Some("Harry Potter".to_string()));
             assert_eq!(guest.is_active, 1);
-            assert!(!token.is_empty());
+            assert!(guest.registered_at.is_some());
+            assert!(guest.registered_at.unwrap().and_utc().timestamp() > 0);
             assert!(Uuid::parse_str(&token).is_ok());
 
             // Verify the session exists.
             let session_count: i64 = sessions::table
-                .filter(sessions::token.eq(&token))
+                .filter(
+                    sessions::guest_id
+                        .eq(inserted_id)
+                        .and(sessions::token.eq(&token)),
+                )
                 .count()
-                .get_result(conn)
-                .expect("Session count failed");
+                .get_result(conn)?;
             assert_eq!(session_count, 1);
+
+            // Try registering again (should fail).
+            let err = register_guest(conn, inserted_id, 2, "Hannah Abbott")
+                .expect_err("Should fail as already active");
+            assert!(matches!(err, diesel::result::Error::QueryBuilderError(_)));
+
+            // Try non-existent guest.
+            let err = register_guest(conn, 999, 1, "Ron Weasley")
+                .expect_err("Should fail as non-existent guest");
+            assert!(matches!(err, diesel::result::Error::NotFound));
 
             Ok(())
         });
@@ -448,9 +563,20 @@ mod tests {
     #[test]
     fn test_get_guest_by_token() {
         run_test_in_transaction(|conn| {
+            // Insert inactive guest.
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Token Guest",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register a guest.
-            let (guest, token) =
-                register_guest(conn, "Token Guest", 2).expect("Failed to register guest");
+            let (guest, token) = register_guest(conn, inserted_id, 3, "Padma Patil")
+                .expect("Failed to register guest");
 
             // Get by token.
             let fetched: Guest = get_guest_by_token(conn, &token).expect("Failed to fetch guest");
@@ -468,9 +594,20 @@ mod tests {
     #[test]
     fn test_unregister_guest() {
         run_test_in_transaction(|conn| {
+            // Insert inactive guest.
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Unregister Guest",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register a guest.
-            let (guest, _) =
-                register_guest(conn, "Unregister Guest", 3).expect("Failed to register guest");
+            let (guest, _) = register_guest(conn, inserted_id, 3, "Terry Boot")
+                .expect("Failed to register guest");
 
             // Unregister the guest.
             let affected = unregister_guest(conn, guest.id).expect("Failed to unregister guest");
@@ -511,17 +648,30 @@ mod tests {
     #[test]
     fn test_reregister_guest() {
         run_test_in_transaction(|conn| {
+            // Insert inactive guest.
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Reregister Guest",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register, then unregister a guest.
-            let (guest, _) =
-                register_guest(conn, "Reregister Guest", 4).expect("Failed to register guest");
+            let (guest, _) = register_guest(conn, inserted_id, 4, "Draco Malfoy")
+                .expect("Failed to register guest");
             unregister_guest(conn, guest.id).expect("Failed to unregister guest");
 
             // Reregister with new house.
             let (reregistered, new_token) =
-                reregister_guest(conn, guest.id, Some(2)).expect("Failed to reregister guest");
+                reregister_guest(conn, guest.id, Some(1), Some("Ron Weasley"))
+                    .expect("Failed to reregister guest");
             assert_eq!(reregistered.id, guest.id);
-            assert_eq!(reregistered.house_id, 2);
+            assert_eq!(reregistered.house_id, Some(1));
             assert_eq!(reregistered.is_active, 1i32);
+            assert_eq!(reregistered.character, Some("Ron Weasley".to_string()));
             assert!(!new_token.is_empty());
             assert!(Uuid::parse_str(&new_token).is_ok());
 
@@ -536,15 +686,17 @@ mod tests {
             // Reregister without house change, verify that house id remains the same but session token
             // changes.
             let (no_change, no_change_token) =
-                reregister_guest(conn, guest.id, None).expect("Failed to reregister guest");
-            assert_eq!(no_change.house_id, 2);
+                reregister_guest(conn, guest.id, None, Some("Hermione Granger"))
+                    .expect("Failed to reregister guest");
+            assert_eq!(no_change.house_id, Some(1));
+            assert_eq!(no_change.character, Some("Hermione Granger".to_string()));
             assert_ne!(no_change_token, new_token);
 
             // Reregister a guest that doesn't exist, verify that an error is returned.
-            assert!(reregister_guest(conn, 42, None).is_err());
+            assert!(reregister_guest(conn, 42, None, None).is_err());
 
             // Reregister a guest with a house that doesn't exist, verify that an error is returned.
-            assert!(reregister_guest(conn, guest.id, Some(69)).is_err());
+            assert!(reregister_guest(conn, guest.id, Some(69), None).is_err());
 
             Ok(())
         });
@@ -568,14 +720,26 @@ mod tests {
     #[test]
     fn test_get_guest_details() {
         run_test_in_transaction(|conn| {
+            // Insert inactive guest.
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register a guest with Gryffindor.
-            let (guest, _) = register_guest(conn, "Hagrid", 1)?;
+            let (guest, _) = register_guest(conn, inserted_id, 1, "Hagrid")?;
             let guest_id = guest.id;
 
             // Read the guest details and verify that they are correct.
             let (guest, house) = get_guest_details(conn, guest_id)?;
             assert_eq!(guest.id, guest_id);
-            assert_eq!(guest.name, "Hagrid");
+            assert_eq!(guest.name, "Guest");
+            assert_eq!(guest.character, Some("Hagrid".to_string()));
             assert_eq!(house.name, "Gryffindor");
 
             // Verify that reading a non-existent guest results in error.
@@ -594,41 +758,70 @@ mod tests {
     #[test]
     fn test_award_points_to_guest() {
         run_test_in_transaction(|conn| {
+            // Insert some inactive guests.
+            let id_1: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 1",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+            let id_2: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 2",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+            let id_3: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 3",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register 3 guests - 2 in Gryffindor and 1 in Slytherin.
-            let (gryffindor_guest_1, _) = register_guest(conn, "Gryffindor Guest 1", 1)?;
-            let (gryffindor_guest_2, _) = register_guest(conn, "Gryffindor Guest 2", 1)?;
-            let (slytherin_guest, _) = register_guest(conn, "Slytherin Guest", 4)?;
+            let (lavender, _) = register_guest(conn, id_1, 1, "Lavender Brown")?;
+            let (parvati, _) = register_guest(conn, id_2, 1, "Parvati Patil")?;
+            let (pansy, _) = register_guest(conn, id_3, 4, "Pansy Parkinson")?;
 
             // Award points to first Gryffindor guest, and verify the contents of the returned value.
-            let award = award_points_to_guest(conn, gryffindor_guest_1.id, 10, "Game win")?;
+            let award = award_points_to_guest(conn, lavender.id, 10, "Game win")?;
             assert_eq!(award.amount, 10);
             assert_eq!(award.reason, "Game win");
-            assert_eq!(award.guest_id, Some(gryffindor_guest_1.id));
+            assert_eq!(award.guest_id, Some(lavender.id));
 
             // Read the guest details and verify the individual and house points.
-            let (gryffindor_guest_1, gryffindor) = get_guest_details(conn, gryffindor_guest_1.id)?;
-            assert_eq!(gryffindor_guest_1.personal_score, 10);
+            let (lavender, gryffindor) = get_guest_details(conn, lavender.id)?;
+            assert_eq!(lavender.personal_score, 10);
             assert_eq!(gryffindor.score, 10);
 
             // Deduct points from the same guest. Read the guest details and verify the individual
             // and house points.
-            award_points_to_guest(conn, gryffindor_guest_1.id, -5, "Penalty")?;
-            let (gryffindor_guest_1, gryffindor) = get_guest_details(conn, gryffindor_guest_1.id)?;
-            assert_eq!(gryffindor_guest_1.personal_score, 5);
+            award_points_to_guest(conn, lavender.id, -5, "Penalty")?;
+            let (lavender, gryffindor) = get_guest_details(conn, lavender.id)?;
+            assert_eq!(lavender.personal_score, 5);
             assert_eq!(gryffindor.score, 5);
 
             // Award points to second Gryffindor guest. Read the guest details and verify the
             // individual and house points.
-            award_points_to_guest(conn, gryffindor_guest_2.id, 20, "Game win")?;
-            let (gryffindor_guest_2, gryffindor) = get_guest_details(conn, gryffindor_guest_2.id)?;
-            assert_eq!(gryffindor_guest_2.personal_score, 20);
+            award_points_to_guest(conn, parvati.id, 20, "Game win")?;
+            let (parvati, gryffindor) = get_guest_details(conn, parvati.id)?;
+            assert_eq!(parvati.personal_score, 20);
             assert_eq!(gryffindor.score, 25);
 
             // Award points to Slytherin guest. Read the guest details and verify the individual
             // and house points.
-            award_points_to_guest(conn, slytherin_guest.id, 15, "Game win")?;
-            let (slytherin_guest, slytherin) = get_guest_details(conn, slytherin_guest.id)?;
-            assert_eq!(slytherin_guest.personal_score, 15);
+            award_points_to_guest(conn, pansy.id, 15, "Game win")?;
+            let (pansy, slytherin) = get_guest_details(conn, pansy.id)?;
+            assert_eq!(pansy.personal_score, 15);
             assert_eq!(slytherin.score, 15);
 
             // Award points to a non-existent guest, and verify that an error is returned.
@@ -700,53 +893,99 @@ mod tests {
     #[test]
     fn test_get_all_active_guests() {
         run_test_in_transaction(|conn| {
+            // Insert some inactive guests.
+            let id_1: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 1",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+            let id_2: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 2",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+            let _: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 3",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             let active = get_all_active_guests(conn)?;
             assert_eq!(active.len(), 0);
 
             // Register some guests.
-            register_guest(conn, "Guest1", 1)?;
-            register_guest(conn, "Guest2", 2)?;
-            let (inactive, _) = register_guest(conn, "Guest3", 3)?;
-            unregister_guest(conn, inactive.id)?;
+            register_guest(conn, id_1, 1, "Seamus Finnigan")?;
+            register_guest(conn, id_2, 2, "Justin Finch-Fletchley")?;
 
             let active = get_all_active_guests(conn)?;
             assert_eq!(active.len(), 2);
-            assert!(active.iter().any(|g| g.name == "Guest1"));
-            assert!(active.iter().any(|g| g.name == "Guest2"));
+            assert!(active.iter().any(|g| g.name == "Guest 1"));
+            assert!(active.iter().any(|g| g.name == "Guest 2"));
 
             Ok(())
         });
     }
 
     #[test]
-    fn test_clear_all_guests() {
+    fn test_reset_database() {
         run_test_in_transaction(|conn| {
+            // Insert some inactive guests.
+            let id_1: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 1",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+            let id_2: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 2",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register some guests and award points.
-            let (guest_1, _) = register_guest(conn, "Guest1", 1)?;
-            let (guest_2, _) = register_guest(conn, "Guest2", 2)?;
-            award_points_to_guest(conn, guest_1.id, 10, "Guest1 award")?;
-            award_points_to_guest(conn, guest_2.id, 20, "Guest1 award")?;
+            let (guest_1, _) = register_guest(conn, id_1, 1, "Vincent Crabbe")?;
+            let (guest_2, _) = register_guest(conn, id_2, 2, "Gregory Goyle")?;
+            award_points_to_guest(conn, guest_1.id, 10, "Guest 1 award")?;
+            award_points_to_guest(conn, guest_2.id, 20, "Guest 2 award")?;
             award_points_to_house(conn, 1, 15, "House award")?;
             award_points_to_house(conn, 2, 5, "House award")?;
 
             // Verify the data exists.
             let guests_count: i64 = guests::table.count().get_result(conn)?;
-            assert_eq!(guests_count, 2);
+            assert!(guests_count >= 2); // Account for prepopulated guests.
             let sessions_count: i64 = sessions::table.count().get_result(conn)?;
             assert_eq!(sessions_count, 2);
             let awards_count: i64 = point_awards::table.count().get_result(conn)?;
             assert_eq!(awards_count, 4);
 
-            // Clear guests.
-            clear_all_guests(conn)?;
+            // Reset database.
+            reset_database(conn)?;
 
-            // Verify that guests, sessions, and guest point awards are cleared.
             let guests_count: i64 = guests::table.count().get_result(conn)?;
-            assert_eq!(guests_count, 0);
+            assert!(guests_count > 0);
             let sessions_count: i64 = sessions::table.count().get_result(conn)?;
             assert_eq!(sessions_count, 0);
             let awards_count: i64 = point_awards::table.count().get_result(conn)?;
-            assert_eq!(awards_count, 2);
+            assert_eq!(awards_count, 0);
 
             Ok(())
         });
@@ -819,8 +1058,19 @@ mod tests {
     #[test]
     fn test_get_guest_token_existing() {
         run_test_in_transaction(|conn| {
+            // Insert inactive guest.
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 1",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
             // Register a guest.
-            let (guest, _) = register_guest(conn, "Test Guest", 1)?;
+            let (guest, _) = register_guest(conn, inserted_id, 1, "Bill Weasley")?;
 
             // Get the token.
             let token_opt = get_guest_token(conn, guest.id)?;
@@ -863,7 +1113,18 @@ mod tests {
     #[test]
     fn test_get_all_point_awards_with_guest_award() {
         run_test_in_transaction(|conn| {
-            let (guest, _) = register_guest(conn, "Award Guest", 1)?;
+            // Insert inactive guest.
+            let inserted_id: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Award Guest",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            let (guest, _) = register_guest(conn, inserted_id, 1, "Neville Longbottom")?;
             let award = award_points_to_guest(conn, guest.id, 10, "No reason")?;
 
             let awards = get_all_point_awards(conn)?;
@@ -902,12 +1163,32 @@ mod tests {
     #[test]
     fn test_get_all_point_awards_multiple_ordered() {
         run_test_in_transaction(|conn| {
-            let (guest_1, _) = register_guest(conn, "Guest 1", 1)?;
+            // Insert some inactive guests.
+            let id_1: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 1",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+            let id_2: i32 = diesel::insert_into(guests::table)
+                .values(&NewGuest {
+                    name: "Guest 2",
+                    house_id: None,
+                    character: None,
+                    registered_at: None,
+                })
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            let (guest_1, _) = register_guest(conn, id_1, 1, "Fred Weasley")?;
             award_points_to_guest(conn, guest_1.id, 10, "First")?;
             std::thread::sleep(std::time::Duration::from_millis(1));
             award_points_to_house(conn, 4, 5, "Second")?;
             std::thread::sleep(std::time::Duration::from_millis(1));
-            let (guest_2, _) = register_guest(conn, "Guest 2", 3)?;
+            let (guest_2, _) = register_guest(conn, id_2, 3, "George Weasley")?;
             award_points_to_guest(conn, guest_2.id, 5, "Third")?;
             std::thread::sleep(std::time::Duration::from_millis(1));
             award_points_to_guest(conn, guest_1.id, 20, "Fourth")?;

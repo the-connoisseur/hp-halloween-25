@@ -20,10 +20,11 @@ pub struct House {
 pub struct Guest {
     pub id: i32,
     pub name: String,
-    pub house_id: i32,
+    pub house_id: Option<i32>,
     pub personal_score: i32,
     pub is_active: i32,
-    pub created_at: NaiveDateTime,
+    pub registered_at: Option<NaiveDateTime>,
+    pub character: Option<String>,
 }
 
 #[cfg(feature = "ssr")]
@@ -31,8 +32,10 @@ pub struct Guest {
 #[diesel(table_name = crate::schema::guests)]
 pub struct NewGuest<'a> {
     pub name: &'a str,
-    pub house_id: i32,
-    // personal_score, is_active, and created_at use defaults
+    pub house_id: Option<i32>,
+    pub character: Option<&'a str>,
+    pub registered_at: Option<chrono::NaiveDateTime>,
+    // personal_score and is_active use defaults
 }
 
 #[cfg(feature = "ssr")]
