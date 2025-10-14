@@ -618,59 +618,72 @@ fn Login() -> impl IntoView {
     };
 
     view! {
-        <div>
+        <div class="login-container">
             <h1>"Login"</h1>
-            <form on:submit=submit>
-                <label>
-                    "Guest: "
-                    <select on:change=move |ev| {
-                        let val = event_target_value(&ev).parse::<i32>().unwrap_or(0);
-                        selected_guest.set(val);
-                    }>
-                        <option value="0">"Select your name"</option>
-                        <Suspense fallback=|| {
-                            view! { "Loading..." }
-                        }>
-                            {move || {
-                                guests_resource
-                                    .with(move |opt_res| {
-                                        match opt_res {
-                                            None => view! { "Loading..." }.into_any(),
-                                            Some(res) => {
-                                                match res {
-                                                    Ok(guests) => {
-                                                        guests
-                                                            .iter()
-                                                            .map(|guest| {
-                                                                view! {
-                                                                    <option value=guest
-                                                                        .id
-                                                                        .to_string()>{guest.name.clone()}</option>
-                                                                }
-                                                            })
-                                                            .collect_view()
-                                                            .into_any()
-                                                    }
-                                                    Err(e) => {
-                                                        view! {
-                                                            "Error loading guests: "
-                                                            {e.to_string()}
+            <form class="admin-form" on:submit=submit>
+                <div class="form-group">
+                    <label>
+                        "Guest: "
+                        <select
+                            class="form-select"
+                            on:change=move |ev| {
+                                let val = event_target_value(&ev).parse::<i32>().unwrap_or(0);
+                                selected_guest.set(val);
+                            }
+                        >
+                            <option value="0">"Select your name"</option>
+                            <Suspense fallback=|| {
+                                view! { "Loading..." }
+                            }>
+                                {move || {
+                                    guests_resource
+                                        .with(move |opt_res| {
+                                            match opt_res {
+                                                None => view! { "Loading..." }.into_any(),
+                                                Some(res) => {
+                                                    match res {
+                                                        Ok(guests) => {
+                                                            guests
+                                                                .iter()
+                                                                .map(|guest| {
+                                                                    view! {
+                                                                        <option value=guest
+                                                                            .id
+                                                                            .to_string()>{guest.name.clone()}</option>
+                                                                    }
+                                                                })
+                                                                .collect_view()
+                                                                .into_any()
                                                         }
-                                                            .into_any()
+                                                        Err(e) => {
+                                                            view! {
+                                                                "Error loading guests: "
+                                                                {e.to_string()}
+                                                            }
+                                                                .into_any()
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
-                                    })
-                            }}
-                        </Suspense>
-                    </select>
-                </label>
-                <label>
-                    "Token: "
-                    <input type="text" on:input=move |ev| token.set(event_target_value(&ev)) />
-                </label>
-                <button type="submit">"Login"</button>
+                                        })
+                                }}
+                            </Suspense>
+                        </select>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        "Token: "
+                        <input
+                            class="form-input"
+                            type="text"
+                            on:input=move |ev| token.set(event_target_value(&ev))
+                        />
+                    </label>
+                </div>
+                <button class="btn-primary" type="submit">
+                    "Login"
+                </button>
             </form>
             {move || (!error.get().is_empty()).then(|| view! { <p>{error.get()}</p> })}
         </div>
@@ -702,17 +715,22 @@ fn AdminLogin() -> impl IntoView {
     };
 
     view! {
-        <div>
+        <div class="login-container">
             <h1>"Admin Login"</h1>
-            <form on:submit=submit>
-                <label>
-                    "Password: "
-                    <input
-                        type="password"
-                        on:input=move |ev| password.set(event_target_value(&ev))
-                    />
-                </label>
-                <button type="submit">"Login"</button>
+            <form class="admin-form" on:submit=submit>
+                <div class="form-group">
+                    <label>
+                        "Password: "
+                        <input
+                            class="form-input"
+                            type="password"
+                            on:input=move |ev| password.set(event_target_value(&ev))
+                        />
+                    </label>
+                </div>
+                <button class="btn-primary" type="submit">
+                    "Login"
+                </button>
             </form>
             {move || {
                 if !error.get().is_empty() {

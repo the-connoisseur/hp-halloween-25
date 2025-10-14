@@ -19,6 +19,17 @@ body {
   text-align: left;
 }
 
+.login-container {
+  max-width: 400px;
+  margin: 0 auto;
+  text-align: left;
+  padding: 20px;
+  background-color: #1a1a1b;
+  border-radius: 8px;
+  border: 1px solid #3a3a3c;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
 // Creates a flexbox header row that spaces the title and logout button evenly;
 // adds a bottom border for separation.
 .admin-header {
