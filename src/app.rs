@@ -772,6 +772,11 @@ fn AdminDashboard() -> impl IntoView {
                     selected_guest_id.set(0i32);
                     new_guest_character.set(String::new());
 
+                    // Refetch the unregistered and active guests resources to update the dropdown
+                    // and active guests table without requiring a page refresh.
+                    unregistered_guests_fetcher.refetch();
+                    active_guests_fetcher.refetch();
+
                     #[cfg(feature = "hydrate")]
                     {
                         // Trigger the sort server.
@@ -892,7 +897,12 @@ fn AdminDashboard() -> impl IntoView {
                 .unwrap_or(false)
             {
                 match unregister_guest_handler(guest_id).await {
-                    Ok(_) => active_guests_fetcher.refetch(),
+                    Ok(_) => {
+                        // Refetch both active and unregistered guests resources to update the
+                        // table and dropdowns without requiring a page refresh.
+                        active_guests_fetcher.refetch();
+                        unregistered_guests_fetcher.refetch();
+                    }
                     Err(e) => log!("Error: {}", e),
                 }
             }
