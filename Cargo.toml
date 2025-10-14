@@ -25,7 +25,7 @@ diesel = { version = "2.3.0", features = ["sqlite", "chrono", "r2d2", "uuid", "r
 uuid = { version = "1.18", features = ["v4", "serde"], optional = true }
 dotenvy = { version = "0.15", optional = true }
 
-web-sys = { version = "0.3.72", features = ["Window", "Request", "RequestInit", "Response", "Headers", "UrlSearchParams"], optional = true }
+web-sys = { version = "0.3.72", features = ["Window", "Navigator", "Clipboard", "Request", "RequestInit", "Response", "Headers", "UrlSearchParams"], optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 
 [features]

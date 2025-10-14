@@ -813,6 +813,26 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
+    let copy_token = move |token: String| {
+        #[cfg(feature = "hydrate")]
+        {
+            spawn_local(async move {
+                let window = web_sys::window().expect("window");
+                let clipboard = window.navigator().clipboard();
+                let promise = clipboard.write_text(&token);
+                let future = wasm_bindgen_futures::JsFuture::from(promise);
+                match future.await {
+                    Ok(_) => log!("Token copied to clipboard successfully"),
+                    Err(e) => log!("Failed to copy token to clipboard: {:?}", e),
+                }
+            });
+        }
+        #[cfg(not(feature = "hydrate"))]
+        {
+            log!("Clipboard API not available on server");
+        }
+    };
+
     // Signals related to awarding points to a guest.
     let award_guest_id = RwSignal::new(0i32);
     let award_guest_amount = RwSignal::new(0i32);
@@ -1063,8 +1083,12 @@ fn AdminDashboard() -> impl IntoView {
                                 {move || {
                                     if !registered_token.get().is_empty() {
                                         view! {
-                                            <p class="token-display">
-                                                "Token: " {registered_token.get()}
+                                            <p
+                                                class="token-display"
+                                                on:click=move |_| copy_token(registered_token.get())
+                                                title="Click to copy to clipboard"
+                                            >
+                                                {registered_token.get()}
                                             </p>
                                         }
                                             .into_any()
