@@ -929,19 +929,28 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
-    let show_token = move |guest_id: i32| {
+    let copy_guest_token = move |guest_id: i32| {
         spawn_local(async move {
             match get_guest_token_handler(guest_id).await {
                 Ok(token) => {
-                    leptos::leptos_dom::helpers::window()
-                        .alert_with_message(&format!("Token: {}", token))
-                        .unwrap_or_default();
+                    #[cfg(feature = "hydrate")]
+                    {
+                        let window = web_sys::window().expect("window");
+                        let clipboard = window.navigator().clipboard();
+                        let promise = clipboard.write_text(&token);
+                        let future = wasm_bindgen_futures::JsFuture::from(promise);
+                        match future.await {
+                            Ok(_) => log!("Guest token copied to clipboard successfully"),
+                            Err(e) => log!("Failed to copy guest token to clipboard: {:?}", e),
+                        }
+                    }
+                    #[cfg(not(feature = "hydrate"))]
+                    {
+                        log!("Clipboard API not available on server");
+                    }
                 }
                 Err(e) => {
-                    log!("Error fetching token: {}", e);
-                    leptos::leptos_dom::helpers::window()
-                        .alert_with_message(&format!("Error: {}", e))
-                        .unwrap_or_default();
+                    log!("Error fetching guest token: {}", e);
                 }
             }
         });
@@ -1320,9 +1329,9 @@ fn AdminDashboard() -> impl IntoView {
                                                                                 <td>
                                                                                     <button
                                                                                         class="btn-secondary"
-                                                                                        on:click=move |_| show_token(id)
+                                                                                        on:click=move |_| copy_guest_token(id)
                                                                                     >
-                                                                                        "Show token"
+                                                                                        "Copy token"
                                                                                     </button>
                                                                                     <button class="btn-danger" on:click=move |_| unregister(id)>
                                                                                         "Unregister"
