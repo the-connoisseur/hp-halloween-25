@@ -183,6 +183,38 @@ body {
   }
 }
 
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100%);
+  background-color: #538d4e;
+  color: #ffffff;
+  padding: 12px 20px;
+  border-radius: 4px;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  &.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0%);
+  }
+
+  @media (max-width: 600px) {
+    left: 10px;
+    right: 10px;
+    transform: translateX(0) translateY(100%);
+
+    &.show {
+    transform: translateX(0) translateY(0);
+    }
+
+    width: auto;
+  }
+}
+
 // Mobile responsiveness: Stacks header vertically, reduces section padding,
 // shrinks table font/padding, makes buttons full-width with margins for easier
 // tapping on touch devices.

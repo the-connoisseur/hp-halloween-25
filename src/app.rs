@@ -813,6 +813,30 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
+    // Signals related to displaying a toast.
+    let toast_visible = RwSignal::new(false);
+    let toast_message = RwSignal::new(String::new());
+    // If a user clicks on multiple elements that result in the toast being displayed in quick
+    // succession, we only want the last of the timers spawned from those events to hide the toast.
+    // This id tracks the unique id of the newest timer that triggered the toast.
+    let toast_id = RwSignal::new(0i32);
+
+    let show_toast = move |message: String| {
+        let current_id = {
+            let new_id = toast_id.get_untracked() + 1;
+            toast_id.set(new_id);
+            new_id
+        };
+        toast_visible.set(true);
+        toast_message.set(message);
+        spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(2000).await;
+            if toast_id.get_untracked() == current_id {
+                toast_visible.set(false);
+            }
+        });
+    };
+
     let copy_token = move |token: String| {
         #[cfg(feature = "hydrate")]
         {
@@ -822,7 +846,10 @@ fn AdminDashboard() -> impl IntoView {
                 let promise = clipboard.write_text(&token);
                 let future = wasm_bindgen_futures::JsFuture::from(promise);
                 match future.await {
-                    Ok(_) => log!("Token copied to clipboard successfully"),
+                    Ok(_) => {
+                        log!("Token copied to clipboard successfully");
+                        show_toast("copied to clipboard".to_string());
+                    }
                     Err(e) => log!("Failed to copy token to clipboard: {:?}", e),
                 }
             });
@@ -940,7 +967,10 @@ fn AdminDashboard() -> impl IntoView {
                         let promise = clipboard.write_text(&token);
                         let future = wasm_bindgen_futures::JsFuture::from(promise);
                         match future.await {
-                            Ok(_) => log!("Guest token copied to clipboard successfully"),
+                            Ok(_) => {
+                                log!("Guest token copied to clipboard successfully");
+                                show_toast("Copied to clipboard".to_string());
+                            }
                             Err(e) => log!("Failed to copy guest token to clipboard: {:?}", e),
                         }
                     }
@@ -1407,6 +1437,12 @@ fn AdminDashboard() -> impl IntoView {
                                     </table>
                                 </div>
                             </section>
+
+                            <div class=move || {
+                                if toast_visible.get() { "toast show" } else { "toast" }
+                            }>
+                                <p style="margin: 0; text-align: center">{toast_message.get()}</p>
+                            </div>
                         </div>
                     }
                         .into_any()
