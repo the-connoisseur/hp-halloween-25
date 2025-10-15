@@ -637,6 +637,9 @@ fn Login() -> impl IntoView {
 
     view! {
         <div class="login-container">
+            <a class="back-link" href="/">
+                "← Home"
+            </a>
             <h1>"Login"</h1>
             <form class="admin-form" on:submit=submit>
                 <div class="form-group">
@@ -751,6 +754,9 @@ fn AdminLogin() -> impl IntoView {
 
     view! {
         <div class="login-container">
+            <a class="back-link" href="/">
+                "← Home"
+            </a>
             <h1>"Admin Login"</h1>
             <form class="admin-form" on:submit=submit>
                 <div class="form-group">
@@ -1056,6 +1062,9 @@ fn AdminDashboard() -> impl IntoView {
                     view! {
                         <div class="admin-container">
                             <header class="admin-header">
+                                <a class="back-link" href="/">
+                                    "← Home"
+                                </a>
                                 <h1>"Admin Dashboard"</h1>
                                 <button class="btn-logout" on:click=logout>
                                     "Logout"
@@ -1682,6 +1691,9 @@ fn Wordle() -> impl IntoView {
 
     view! {
         <div class="wordle">
+            <a class="back-link" href="/">
+                "← Home"
+            </a>
             <h1>"Wordle"</h1>
             <div class="grid">{grid}</div>
             <p>{move || message.get()}</p>

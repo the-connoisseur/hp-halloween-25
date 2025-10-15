@@ -30,6 +30,19 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+.back-link {
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  transition: color 0.2s;
+
+  &:hover {
+    color: #b59f3a;
+  }
+}
+
 // Creates a flexbox header row that spaces the title and logout button evenly;
 // adds a bottom border for separation.
 .admin-header {
@@ -39,6 +52,14 @@ body {
   margin-bottom: 20px;
   padding-bottom: 10px;
   border-bottom: 1px solid #3a3a3c;
+  flex-wrap: wrap;
+  gap: 10px;
+
+  h1 {
+    margin: 0;
+    flex: 1;
+    text-align: center;
+  }
 }
 
 // Styles each section (e.g., forms, tables) with margins, padding a slightly
