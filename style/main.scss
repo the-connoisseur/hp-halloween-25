@@ -1,3 +1,11 @@
+@font-face {
+  font-family: 'Harry Potter';
+  src: url('/fonts/HarryPotter.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 // Sets the overall page background to dark, white text, sans-serif font,
 // centers text, removes default margins, adds padding, and ensures box sizing
 // is border-box for consistent layout calculations.
@@ -9,6 +17,77 @@ body {
   margin: 0;
   padding: 10px;
   box-sizing: border-box;
+}
+
+.home-container {
+  max-width: 800px;
+  margin: 0 auto;
+  text-align: left;
+  padding: 20px;
+  background-color: #1a1a1b;
+  border-radius: 8px;
+  border: 1px solid #3a3a3c;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  &.house-gryffindor {
+    border: 2px solid #d32f2f; // Red trim
+    box-shadow: 0 0 10px rgba(211, 47, 47, 0.3); // Subtle red glow
+  }
+
+  &.house-hufflepuff {
+    border: 2px solid #ffca28; // Yellow/Orange trim
+    box-shadow: 0 0 10px rgba(255, 202, 40, 0.3); // Subtle yellow glow
+  }
+
+  &.house-ravenclaw {
+    border: 2px solid #1976d2; // Blue trim
+    box-shadow: 0 0 10px rgba(25, 118, 210, 0.3); // Subtle blue glow
+  }
+
+  &.house-slytherin {
+    border: 2px solid #388e3c; // Green trim
+    box-shadow: 0 0 10px rgba(56, 142, 60, 0.3); // Subtle green glow
+  }
+}
+
+.home-section {
+  margin-bottom: 30px;
+  padding: 20px;
+  background-color: #121213; // Slightly darker than container
+  border-radius: 4px;
+  border: 1px solid #3a3a3c;
+
+  h2, h3 {
+    margin-top: 0;
+  }
+
+  ul {
+    list-style: none;
+    padding: 0;
+
+    li {
+      margin: 10px 0;
+      padding: 8px;
+      background-color: #1a1a1b;
+      border-radius: 4px;
+      border-left: 4px solid #538d4e; // Green accent for list items
+
+      a {
+        color: #b59f3a; // Yellow links
+        text-decoration: none;
+
+        &:hover {
+          text-decoration: underline;
+        }
+      }
+    }
+  }
+}
+
+.games-list {
+  li {
+    border-left-color: #b59f3a; // Yellow for games
+  }
 }
 
 // Centers the admin dashboard content with a max-width of 800px and left-aligns
@@ -277,7 +356,11 @@ body {
 
 // Applies a serif font (Georgia) to headings for a Harry Potter vibe, with a
 // subtle yellow text shadow for thematic glow.
-h1, h2 {
+h1 {
+  font-family: 'Harry Potter', 'Georgia', serif;
+  text-shadow: 0 0 5px rgba(181, 159, 58, 0.5);
+}
+h2, h3 {
   font-family: 'Georgia', serif;
   text-shadow: 0 0 5px rgba(181, 159, 58, 0.5);
 }

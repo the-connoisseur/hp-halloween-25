@@ -493,34 +493,68 @@ pub fn App() -> impl IntoView {
 
 #[component]
 fn Home() -> impl IntoView {
-    let houses = Resource::new(|| (), |_| get_houses());
-    let current_user = Resource::new(|| (), |_| get_current_user());
-    let is_admin_res = Resource::new(|| (), |_| is_admin());
+    let houses_fetcher = Resource::new(|| (), |_| get_houses());
+    let current_user_fetcher = Resource::new(|| (), |_| get_current_user());
+    let is_admin_fetcher = Resource::new(|| (), |_| is_admin());
+
+    let house_class = RwSignal::new(String::new());
+
+    // Signal for house color class when logged in.
+    Effect::new(move |_| {
+        if let (Some(Ok(Some(guest)))) = current_user_fetcher.get() {
+            if let Some(Ok(houses)) = houses_fetcher.get() {
+                if let Some(h) = houses.iter().find(|h| Some(h.id) == guest.house_id) {
+                    house_class.set(match h.id {
+                        1 => "house-gryffindor".to_string(),
+                        2 => "house-hufflepuff".to_string(),
+                        3 => "house-ravenclaw".to_string(),
+                        4 => "house-slytherin".to_string(),
+                        _ => String::new(),
+                    });
+                } else {
+                    house_class.set(String::new());
+                }
+            } else {
+                house_class.set(String::new());
+            }
+        } else {
+            house_class.set(String::new());
+        }
+    });
 
     view! {
-        <div>
+        <div class=move || format!("home-container {}", house_class.get())>
             <h1>"Hogwarts Halloween Party"</h1>
             <Suspense fallback=|| {
                 view! { "Loading..." }
             }>
                 {move || {
-                    houses
+                    houses_fetcher
                         .with(|h_res| match h_res {
                             Some(Ok(houses)) => {
                                 view! {
-                                    <h2>"House Scores"</h2>
-                                    <ul>
-                                        {houses
-                                            .iter()
-                                            .map(|house| {
-                                                view! { <li>{house.name.clone()}: {house.score}</li> }
-                                            })
-                                            .collect_view()}
-                                    </ul>
+                                    <section class="home-section">
+                                        <h2>"House Scores"</h2>
+                                        <ul>
+                                            {houses
+                                                .iter()
+                                                .map(|house| {
+                                                    view! { <li>{house.name.clone()}: {house.score}</li> }
+                                                })
+                                                .collect_view()}
+                                        </ul>
+                                    </section>
                                 }
                                     .into_any()
                             }
-                            _ => view! { "Error loading houses" }.into_any(),
+                            _ => {
+                                view! {
+                                    <section class="house-section">
+                                        <p>"Error loading houses"</p>
+                                    </section>
+                                }
+                                    .into_any()
+                            }
                         })
                 }}
             </Suspense>
@@ -528,10 +562,10 @@ fn Home() -> impl IntoView {
                 view! { "Checking login..." }
             }>
                 {move || {
-                    current_user
+                    current_user_fetcher
                         .with(|u_res| match u_res {
                             Some(Ok(Some(guest))) => {
-                                houses
+                                houses_fetcher
                                     .with(|h_res| match h_res {
                                         Some(Ok(houses)) => {
                                             let house_opt = houses
@@ -541,28 +575,41 @@ fn Home() -> impl IntoView {
                                                 .map(|h| h.name.clone())
                                                 .unwrap_or("Unknown".to_string());
                                             view! {
-                                                <h2>
-                                                    "Welcome, " {guest.name.clone()} " to " {house_name}
-                                                </h2>
-                                                <p>"Your personal score: " {guest.personal_score}</p>
-                                                <h3>"Games and Activities"</h3>
-                                                <ul>
-                                                    <li>
-                                                        <a href="/games/wordle">"Harry Potter Wordle"</a>
-                                                    </li>
-                                                // Add other games here as they are implemented
-                                                </ul>
+                                                <section class="home-section">
+                                                    <h2>
+                                                        "Welcome, " {guest.name.clone()} " to " {house_name}
+                                                    </h2>
+                                                    <p>"Your personal score: " {guest.personal_score}</p>
+                                                </section>
+                                                <section class="home-section">
+                                                    <h3>"Games and Activities"</h3>
+                                                    <ul class="games-list">
+                                                        <li>
+                                                            <a href="/games/wordle">"Harry Potter Wordle"</a>
+                                                        </li>
+                                                    // Add other games here as they are implemented
+                                                    </ul>
+                                                </section>
                                             }
                                                 .into_any()
                                         }
-                                        _ => view! { "Error loading houses" }.into_any(),
+                                        _ => {
+                                            view! {
+                                                <section class="home-section">
+                                                    <p>"Error loading houses"</p>
+                                                </section>
+                                            }
+                                                .into_any()
+                                        }
                                     })
                             }
                             _ => {
                                 view! {
-                                    <p>
-                                        <a href="/login">"Login"</a>
-                                    </p>
+                                    <section class="home-section">
+                                        <p>
+                                            <a href="/login">"Login"</a>
+                                        </p>
+                                    </section>
                                 }
                                     .into_any()
                             }
@@ -571,13 +618,15 @@ fn Home() -> impl IntoView {
             </Suspense>
             <Suspense>
                 {move || {
-                    is_admin_res
+                    is_admin_fetcher
                         .with(|admin| match admin {
                             Some(Ok(true)) => {
                                 view! {
-                                    <p>
-                                        <a href="/admin">"Admin Dashboard"</a>
-                                    </p>
+                                    <section class="home-section">
+                                        <p>
+                                            <a href="/admin">"Admin Dashboard"</a>
+                                        </p>
+                                    </section>
                                 }
                                     .into_any()
                             }
