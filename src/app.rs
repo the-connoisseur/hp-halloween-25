@@ -1,7 +1,6 @@
 use leptos::ev::SubmitEvent;
 use leptos::logging::log;
 use leptos::prelude::*;
-use leptos::server_fn::error::NoCustomError;
 use leptos::task::spawn_local;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
@@ -31,57 +30,61 @@ use diesel::SqliteConnection;
 #[cfg(feature = "ssr")]
 pub type DbPool = Pool<ConnectionManager<SqliteConnection>>;
 
-#[server(GetHouses)]
-pub async fn get_houses() -> Result<Vec<House>, ServerFnError<NoCustomError>> {
-    let pool: DbPool = expect_context();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        get_all_houses(&mut conn).map_err(|e| ServerFnError::ServerError(e.to_string()))
-    })
-    .await;
-    match result {
-        Ok(houses) => houses,
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize, serde::Deserialize)]
+pub enum AppError {
+    #[error("Database error: {0}")]
+    DbError(String),
+    #[error("HTTP error: {0}")]
+    HttpError(String),
+    #[error("Authorization error: {0}")]
+    AuthError(String),
+    #[error("Server framework error: {0}")]
+    ServerFnError(#[from] ServerFnErrorErr),
+}
+
+impl leptos::server_fn::error::FromServerFnError for AppError {
+    type Encoder = leptos::server_fn::codec::JsonEncoding;
+
+    fn from_server_fn_error(value: ServerFnErrorErr) -> Self {
+        AppError::ServerFnError(value)
     }
+}
+
+#[server(GetHouses)]
+pub async fn get_houses() -> Result<Vec<House>, AppError> {
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_all_houses(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(GetActiveGuests)]
-pub async fn get_active_guests() -> Result<Vec<Guest>, ServerFnError<NoCustomError>> {
+pub async fn get_active_guests() -> Result<Vec<Guest>, AppError> {
     let pool: DbPool = expect_context();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        get_all_active_guests(&mut conn).map_err(|e| ServerFnError::ServerError(e.to_string()))
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_all_active_guests(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
     })
-    .await;
-    match result {
-        Ok(guests) => guests,
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
-    }
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(GetUnregisteredGuests)]
-pub async fn get_unregistered_guests() -> Result<Vec<Guest>, ServerFnError<NoCustomError>> {
+pub async fn get_unregistered_guests() -> Result<Vec<Guest>, AppError> {
     let pool: DbPool = expect_context();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        get_all_unregistered_guests(&mut conn)
-            .map_err(|e| ServerFnError::ServerError(e.to_string()))
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_all_unregistered_guests(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
     })
-    .await;
-    match result {
-        Ok(guests) => guests,
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
-    }
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(GetCurrentUser)]
-pub async fn get_current_user() -> Result<Option<Guest>, ServerFnError<NoCustomError>> {
+pub async fn get_current_user() -> Result<Option<Guest>, AppError> {
     let pool: DbPool = expect_context();
 
     use axum::http::HeaderMap;
@@ -89,7 +92,7 @@ pub async fn get_current_user() -> Result<Option<Guest>, ServerFnError<NoCustomE
 
     let headers: HeaderMap = extract()
         .await
-        .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        .map_err(|e| AppError::HttpError(e.to_string()))?;
 
     let mut token: Option<String> = None;
     if let Some(cookie_header) = headers.get(axum::http::header::COOKIE) {
@@ -104,36 +107,26 @@ pub async fn get_current_user() -> Result<Option<Guest>, ServerFnError<NoCustomE
         }
     }
 
-    let result = tokio::task::spawn_blocking(
-        move || -> Result<Option<Guest>, ServerFnError<NoCustomError>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-            if let Some(t) = token {
-                Ok(get_guest_by_token(&mut conn, &t).ok())
-            } else {
-                Ok(None)
-            }
-        },
-    )
-    .await;
-
-    match result {
-        Ok(current_user) => current_user,
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
-    }
+    tokio::task::spawn_blocking(move || -> Result<Option<Guest>, AppError> {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        if let Some(t) = token {
+            Ok(get_guest_by_token(&mut conn, &t).ok())
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[cfg(feature = "ssr")]
-async fn extract_and_validate_admin_token(
-    pool: DbPool,
-) -> Result<Option<bool>, ServerFnError<NoCustomError>> {
+async fn extract_and_validate_admin_token(pool: DbPool) -> Result<Option<bool>, AppError> {
     use axum::http::HeaderMap;
     use leptos_axum::extract;
 
     let headers: HeaderMap = extract()
         .await
-        .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+        .map_err(|e| AppError::HttpError(e.to_string()))?;
 
     let mut admin_token: Option<String> = None;
     if let Some(cookie_header) = headers.get(axum::http::header::COOKIE) {
@@ -148,32 +141,24 @@ async fn extract_and_validate_admin_token(
         }
     }
 
-    let result = tokio::task::spawn_blocking(
-        move || -> Result<Option<bool>, ServerFnError<NoCustomError>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-            match admin_token {
-                Some(t) => {
-                    let is_valid = validate_admin_token(&mut conn, &t)
-                        .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-                    Ok(Some(is_valid))
-                }
-                None => Ok(None),
+    tokio::task::spawn_blocking(move || -> Result<Option<bool>, AppError> {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        match admin_token {
+            Some(t) => {
+                let is_valid = validate_admin_token(&mut conn, &t)
+                    .map_err(|e| AppError::DbError(e.to_string()))?;
+                Ok(Some(is_valid))
             }
-        },
-    )
-    .await;
-
-    match result {
-        Ok(validity) => validity,
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
-    }
+            None => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 // Checks if the current request is from an admin. Returns true if it is, false otherwise.
 #[server(IsAdmin)]
-pub async fn is_admin() -> Result<bool, ServerFnError<NoCustomError>> {
+pub async fn is_admin() -> Result<bool, AppError> {
     let pool: DbPool = expect_context();
     let validity = extract_and_validate_admin_token(pool).await?;
     Ok(validity.unwrap_or(false)) // None -> false
@@ -181,37 +166,31 @@ pub async fn is_admin() -> Result<bool, ServerFnError<NoCustomError>> {
 
 // Returns an empty result if the current request is from an admin, or an error otherwise.
 #[cfg(feature = "ssr")]
-async fn check_admin() -> Result<(), ServerFnError<NoCustomError>> {
+async fn check_admin() -> Result<(), AppError> {
     let pool: DbPool = expect_context();
     let validity = extract_and_validate_admin_token(pool).await?;
     match validity {
         Some(true) => Ok(()),
-        _ => Err(ServerFnError::ServerError("Unauthorized".to_string())),
+        _ => Err(AppError::AuthError("Unauthorized".to_string())),
     }
 }
 
 #[server(AdminLogin)]
-pub async fn admin_login(password: String) -> Result<(), ServerFnError<NoCustomError>> {
+pub async fn admin_login(password: String) -> Result<(), AppError> {
     let pool: DbPool = expect_context();
-    let admin_password = env::var("ADMIN_PASSWORD").map_err(|_| {
-        ServerFnError::<NoCustomError>::ServerError("Admin password not set".to_string())
-    })?;
+    let admin_password = env::var("ADMIN_PASSWORD")
+        .map_err(|_| AppError::AuthError("Admin password not set".to_string()))?;
 
     if password != admin_password {
-        return Err(ServerFnError::ServerError("Invalid password".to_string()));
+        return Err(AppError::AuthError("Invalid password".to_string()));
     }
 
-    let result =
-        tokio::task::spawn_blocking(move || -> Result<String, ServerFnError<NoCustomError>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-            create_admin_session(&mut conn).map_err(|e| ServerFnError::ServerError(e.to_string()))
-        })
-        .await;
-
-    let token =
-        result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))??;
+    let token = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        create_admin_session(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))??;
 
     use leptos_axum::ResponseOptions;
     let resp: ResponseOptions = expect_context();
@@ -222,21 +201,21 @@ pub async fn admin_login(password: String) -> Result<(), ServerFnError<NoCustomE
     resp.insert_header(
         axum::http::header::SET_COOKIE,
         axum::http::HeaderValue::from_str(&cookie)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?,
+            .map_err(|e| AppError::HttpError(e.to_string()))?,
     );
 
     Ok(())
 }
 
 #[server(AdminLogout)]
-pub async fn admin_logout() -> Result<(), ServerFnError<NoCustomError>> {
+pub async fn admin_logout() -> Result<(), AppError> {
     use leptos_axum::ResponseOptions;
     let resp: ResponseOptions = expect_context();
     let cookie = "admin_token=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict";
     resp.insert_header(
         axum::http::header::SET_COOKIE,
         axum::http::HeaderValue::from_str(cookie)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?,
+            .map_err(|e| AppError::HttpError(e.to_string()))?,
     );
     Ok(())
 }
@@ -246,44 +225,37 @@ pub async fn register_guest_handler(
     guest_id: i32,
     house_id: i32,
     character: String,
-) -> Result<(String, i32), ServerFnError<NoCustomError>> {
+) -> Result<(String, i32), AppError> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
         let effective_house_id = if house_id == 0 { None } else { Some(house_id) };
         let (guest, token) = register_guest(&mut conn, guest_id, effective_house_id, &character)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+            .map_err(|e| AppError::DbError(e.to_string()))?;
+        // Registered guests should have a house assigned. Panic if they don't.
         let assigned_house_id = guest.house_id.unwrap();
         Ok((token, assigned_house_id))
     })
-    .await;
-    match result {
-        Ok(token) => token,
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
-    }
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(UnregisterGuest)]
-pub async fn unregister_guest_handler(guest_id: i32) -> Result<(), ServerFnError<NoCustomError>> {
+pub async fn unregister_guest_handler(guest_id: i32) -> Result<(), AppError> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        unregister_guest(&mut conn, guest_id)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        unregister_guest(&mut conn, guest_id).map_err(|e| AppError::DbError(e.to_string()))?;
         Ok(())
     })
-    .await;
-    result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(ReregisterGuest)]
@@ -291,26 +263,20 @@ pub async fn reregister_guest_handler(
     guest_id: i32,
     new_house_id: Option<i32>,
     new_character: Option<String>,
-) -> Result<String, ServerFnError<NoCustomError>> {
+) -> Result<String, AppError> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
 
-    let result =
-        tokio::task::spawn_blocking(move || -> Result<String, ServerFnError<NoCustomError>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-            let (_, token) =
-                reregister_guest(&mut conn, guest_id, new_house_id, new_character.as_deref())
-                    .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-            Ok(token)
-        })
-        .await?;
-    match result {
-        Ok(token) => Ok(token),
-        Err(e) => Err(ServerFnError::ServerError(e.to_string())),
-    }
+    tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        let (_, token) =
+            reregister_guest(&mut conn, guest_id, new_house_id, new_character.as_deref())
+                .map_err(|e| AppError::DbError(e.to_string()))?;
+        Ok(token)
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(AwardPointsToGuest)]
@@ -318,21 +284,19 @@ pub async fn award_points_to_guest_handler(
     guest_id: i32,
     amount: i32,
     reason: String,
-) -> Result<(), ServerFnError<NoCustomError>> {
+) -> Result<(), AppError> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
         award_points_to_guest(&mut conn, guest_id, amount, &reason)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        Ok(())
+            .map(|_| ())
+            .map_err(|e| AppError::DbError(e.to_string()))
     })
-    .await;
-    result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(AwardPointsToHouse)]
@@ -340,92 +304,74 @@ pub async fn award_points_to_house_handler(
     house_id: i32,
     amount: i32,
     reason: String,
-) -> Result<(), ServerFnError<NoCustomError>> {
-    check_admin().await?;
-
-    let pool: DbPool = expect_context();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        award_points_to_house(&mut conn, house_id, amount, &reason)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        Ok(())
-    })
-    .await;
-    result.map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
-}
-
-#[server(GetGuestToken)]
-pub async fn get_guest_token_handler(
-    guest_id: i32,
-) -> Result<String, ServerFnError<NoCustomError>> {
-    check_admin().await?;
-
-    let pool: DbPool = expect_context();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        get_guest_token(&mut conn, guest_id)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))
-    })
-    .await
-    .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-
-    match result {
-        Ok(Some(token)) => Ok(token),
-        Ok(None) => Err(ServerFnError::<NoCustomError>::ServerError(
-            "No token found".to_string(),
-        )),
-        Err(e) => Err(e),
-    }
-}
-
-#[server(GetPointAwards)]
-pub async fn get_point_awards() -> Result<Vec<PointAwardLog>, ServerFnError<NoCustomError>> {
+) -> Result<(), AppError> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
 
     tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        get_all_point_awards(&mut conn)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        award_points_to_house(&mut conn, house_id, amount, &reason)
+            .map(|_| ())
+            .map_err(|e| AppError::DbError(e.to_string()))
     })
     .await
-    .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetGuestToken)]
+pub async fn get_guest_token_handler(guest_id: i32) -> Result<String, AppError> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_guest_token(&mut conn, guest_id)
+            .map_err(|e| AppError::DbError(e.to_string()))
+            .and_then(|maybe_token| {
+                maybe_token.ok_or(AppError::AuthError("No token found".to_string()))
+            })
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetPointAwards)]
+pub async fn get_point_awards() -> Result<Vec<PointAwardLog>, AppError> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_all_point_awards(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
 #[server(Login)]
-pub async fn login_handler(
-    guest_id: i32,
-    token: String,
-) -> Result<(), ServerFnError<NoCustomError>> {
+pub async fn login_handler(guest_id: i32, token: String) -> Result<(), AppError> {
     let pool: DbPool = expect_context();
 
     use leptos_axum::ResponseOptions;
 
     let token_copy = token.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let mut conn = pool
-            .get()
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        let guest = get_guest_by_token(&mut conn, &token_copy)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?;
-        if guest.id != guest_id {
-            return Err(ServerFnError::<NoCustomError>::ServerError(
-                "Invalid guest or token".to_string(),
-            ));
-        }
-        Ok(())
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_guest_by_token(&mut conn, &token_copy)
+            .map_err(|e| AppError::DbError(e.to_string()))
+            .and_then(|guest| {
+                if guest.id == guest_id {
+                    Ok(())
+                } else {
+                    Err(AppError::AuthError("Invalid guest or token".to_string()))
+                }
+            })
     })
-    .await;
-    result??;
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))??;
 
     let resp: ResponseOptions = expect_context();
     let cookie = format!(
@@ -435,7 +381,7 @@ pub async fn login_handler(
     resp.insert_header(
         axum::http::header::SET_COOKIE,
         axum::http::HeaderValue::from_str(&cookie)
-            .map_err(|e| ServerFnError::<NoCustomError>::ServerError(e.to_string()))?,
+            .map_err(|e| AppError::HttpError(e.to_string()))?,
     );
 
     Ok(())
@@ -501,7 +447,7 @@ fn Home() -> impl IntoView {
 
     // Signal for house color class when logged in.
     Effect::new(move |_| {
-        if let (Some(Ok(Some(guest)))) = current_user_fetcher.get() {
+        if let Some(Ok(Some(guest))) = current_user_fetcher.get() {
             if let Some(Ok(houses)) = houses_fetcher.get() {
                 if let Some(h) = houses.iter().find(|h| Some(h.id) == guest.house_id) {
                     house_class.set(match h.id {
@@ -892,7 +838,7 @@ fn AdminDashboard() -> impl IntoView {
                             format!("http://192.168.1.176/sort?house={}", assigned_house_id);
                         let window = web_sys::window().expect("window");
 
-                        let mut init = web_sys::RequestInit::new();
+                        let init = web_sys::RequestInit::new();
                         init.set_method("GET");
                         init.set_mode(web_sys::RequestMode::NoCors);
 

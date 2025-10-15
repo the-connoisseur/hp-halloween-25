@@ -13,18 +13,19 @@ use diesel::prelude::*;
 use diesel::SqliteConnection;
 #[cfg(feature = "ssr")]
 use dotenvy::dotenv;
+#[cfg(feature = "ssr")]
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 #[cfg(feature = "ssr")]
 use std::env;
+#[cfg(feature = "ssr")]
 use std::io::{Error as IoError, ErrorKind};
 #[cfg(feature = "ssr")]
 use uuid::Uuid;
 
 #[cfg(feature = "ssr")]
 use crate::model::{
-    AdminSession, Guest, House, NewAdminSession, NewGuest, NewPointAward, NewSession, PointAward,
-    PointAwardLog,
+    Guest, House, NewAdminSession, NewPointAward, NewSession, PointAward, PointAwardLog,
 };
 #[cfg(feature = "ssr")]
 use crate::schema::{admin_sessions, guests, houses, point_awards, sessions};
@@ -549,6 +550,7 @@ pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result:
 #[cfg(all(test, feature = "ssr"))]
 mod tests {
     use super::*;
+    use crate::model::{AdminSession, NewGuest};
     use crate::schema::houses::dsl::*;
 
     // Helper to run a test in a transaction. This always rolls back the transaction at the end of
