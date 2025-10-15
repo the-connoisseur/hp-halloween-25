@@ -595,7 +595,9 @@ fn Login() -> impl IntoView {
     let token = RwSignal::new(String::new());
     let error = RwSignal::new(String::new());
 
-    let guests_resource = Resource::new(|| (), |_| get_active_guests());
+    let guests_fetcher = Resource::new(|| (), |_| get_active_guests());
+    let current_user_fetcher = Resource::new(|| (), |_| get_current_user());
+    let is_admin_fetcher = Resource::new(|| (), |_| is_admin());
 
     let submit = move |ev: SubmitEvent| {
         ev.prevent_default();
@@ -617,6 +619,22 @@ fn Login() -> impl IntoView {
         });
     };
 
+    // Redirect if already logged in as a guest or admin.
+    let navigate = use_navigate();
+    Effect::new(move || {
+        // First check guest, then admin. We don't want to redirect a guest the admin dashboard.
+        current_user_fetcher.with(|maybe_result| {
+            if let Some(Ok(Some(_))) = maybe_result {
+                navigate("/", NavigateOptions::default());
+            }
+        });
+        is_admin_fetcher.with(|maybe_result| {
+            if let Some(Ok(true)) = maybe_result {
+                navigate("/admin", NavigateOptions::default());
+            }
+        });
+    });
+
     view! {
         <div class="login-container">
             <h1>"Login"</h1>
@@ -636,7 +654,7 @@ fn Login() -> impl IntoView {
                                 view! { "Loading..." }
                             }>
                                 {move || {
-                                    guests_resource
+                                    guests_fetcher
                                         .with(move |opt_res| {
                                             match opt_res {
                                                 None => view! { "Loading..." }.into_any(),
@@ -695,6 +713,9 @@ fn AdminLogin() -> impl IntoView {
     let password = RwSignal::new(String::new());
     let error = RwSignal::new(String::new());
 
+    let current_user_fetcher = Resource::new(|| (), |_| get_current_user());
+    let is_admin_fetcher = Resource::new(|| (), |_| is_admin());
+
     let submit = move |ev: SubmitEvent| {
         ev.prevent_default();
         let p = password.get();
@@ -713,6 +734,20 @@ fn AdminLogin() -> impl IntoView {
             }
         });
     };
+
+    let navigate = use_navigate();
+    Effect::new(move || {
+        current_user_fetcher.with(|maybe_result| {
+            if let Some(Ok(Some(_))) = maybe_result {
+                navigate("/", NavigateOptions::default());
+            }
+        });
+        is_admin_fetcher.with(|maybe_result| {
+            if let Some(Ok(true)) = maybe_result {
+                navigate("/admin", NavigateOptions::default());
+            }
+        });
+    });
 
     view! {
         <div class="login-container">
@@ -752,14 +787,14 @@ fn AdminDashboard() -> impl IntoView {
     let unregistered_guests_fetcher = Resource::new(|| (), |_| get_unregistered_guests());
     let point_awards_fetcher = Resource::new(|| (), |_| get_point_awards());
 
-    // Runs on the next "tick" and redirects to the admin login page if the user is not an admin.
+    // Redirects to the home page if a user who isn't logged in as an admin tries to visit the
+    // admin dashboard.
     // NOTE: This effect does not capture any reactive values, so it won't run again.
-    // TODO: Instead, redirect to the homepage. It's better to not advertise the admin login page.
     let navigate = use_navigate();
     Effect::new(move || {
         is_admin_fetcher.with(|maybe_result| {
             if let Some(Ok(false)) = maybe_result {
-                navigate("/admin/login", NavigateOptions::default());
+                navigate("/", NavigateOptions::default());
             }
         });
     });
