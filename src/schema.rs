@@ -5,7 +5,7 @@ diesel::table! {
     admin_sessions (id) {
         id -> Integer,
         token -> Text,
-        create_at -> Timestamp,
+        created_at -> Timestamp,
         expires_at -> Nullable<Timestamp>,
     }
 }
