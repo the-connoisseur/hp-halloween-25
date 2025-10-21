@@ -25,10 +25,11 @@ use uuid::Uuid;
 
 #[cfg(feature = "ssr")]
 use crate::model::{
-    Guest, House, NewAdminSession, NewPointAward, NewSession, PointAward, PointAwardLog,
+    CrosswordState, DbCrosswordState, Guest, House, NewAdminSession, NewDbCrosswordState,
+    NewPointAward, NewSession, PointAward, PointAwardLog,
 };
 #[cfg(feature = "ssr")]
-use crate::schema::{admin_sessions, guests, houses, point_awards, sessions};
+use crate::schema::{admin_sessions, crossword_states, guests, houses, point_awards, sessions};
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -527,6 +528,9 @@ pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result:
         // Delete all point awards.
         diesel::delete(point_awards::table).execute(conn)?;
 
+        // Delete all guest crossword states.
+        diesel::delete(crossword_states::table).execute(conn)?;
+
         // Reset all guests.
         diesel::update(guests::table)
             .set((
@@ -545,6 +549,130 @@ pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result:
 
         Ok(())
     })
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Direction {
+    Across,
+    Down,
+}
+
+#[derive(Clone, Debug)]
+struct WordDef {
+    start_row: usize,
+    start_col: usize,
+    len: usize,
+    dir: Direction,
+    answer: &'static str,
+    reveal_text: &'static str,
+}
+
+const CROSSWORD_DEFS: &[WordDef] = &[
+    WordDef {
+        start_row: 1,
+        start_col: 1,
+        len: 5,
+        dir: Direction::Across,
+        answer: "WINKY",
+        reveal_text: "TBD 1",
+    },
+    WordDef {
+        start_row: 6,
+        start_col: 0,
+        len: 12,
+        dir: Direction::Across,
+        answer: "EXPELLIARMUS",
+        reveal_text: "TBD 2",
+    },
+    WordDef {
+        start_row: 2,
+        start_col: 0,
+        len: 10,
+        dir: Direction::Down,
+        answer: "DISSENDIUM",
+        reveal_text: "TBD 3",
+    },
+    WordDef {
+        start_row: 0,
+        start_col: 3,
+        len: 8,
+        dir: Direction::Down,
+        answer: "SNUFFLES",
+        reveal_text: "TBD 4",
+    },
+    WordDef {
+        start_row: 5,
+        start_col: 6,
+        len: 10,
+        dir: Direction::Down,
+        answer: "SIRCADOGAN",
+        reveal_text: "TBD 5",
+    },
+    WordDef {
+        start_row: 3,
+        start_col: 8,
+        len: 9,
+        dir: Direction::Down,
+        answer: "BOARHOUND",
+        reveal_text: "TBD 6",
+    },
+    WordDef {
+        start_row: 1,
+        start_col: 10,
+        len: 7,
+        dir: Direction::Down,
+        answer: "IGNOTUS",
+        reveal_text: "TBD 7",
+    },
+];
+
+/// Fetches the crossword state for a guest, or inserts an empty one if it doesn't exist, and
+/// returns it.
+#[cfg(feature = "ssr")]
+pub fn get_or_init_crossword_state(
+    conn: &mut SqliteConnection,
+    guest_id: i32,
+) -> Result<CrosswordState, diesel::result::Error> {
+    let existing: Option<DbCrosswordState> = crossword_states::table
+        .filter(crossword_states::guest_id.eq(guest_id))
+        .first(conn)
+        .optional()?;
+
+    match existing {
+        Some(db_state) => Ok(db_state.state.into()),
+        None => {
+            let initial_state = CrosswordState::new_full_grid(vec![vec![None; 12]; 15], [false; 7]);
+            let new_db_state = NewDbCrosswordState {
+                guest_id,
+                state: initial_state.clone().into(),
+                updated_at: chrono::Utc::now().naive_utc(),
+            };
+            diesel::insert_into(crossword_states::table)
+                .values(&new_db_state)
+                .execute(conn)?;
+            Ok(initial_state)
+        }
+    }
+}
+
+/// Updates the crossword state for a guest. Replaces the entire row in the database.
+#[cfg(feature = "ssr")]
+pub fn update_crossword_state(
+    conn: &mut SqliteConnection,
+    guest_id: i32,
+    new_state: &CrosswordState,
+) -> Result<(), diesel::result::Error> {
+    diesel::delete(crossword_states::table.filter(crossword_states::guest_id.eq(guest_id)))
+        .execute(conn)?;
+    let db_state = NewDbCrosswordState {
+        guest_id,
+        state: new_state.clone().into(),
+        updated_at: chrono::Utc::now().naive_utc(),
+    };
+    diesel::insert_into(crossword_states::table)
+        .values(&db_state)
+        .execute(conn)?;
+    Ok(())
 }
 
 #[cfg(all(test, feature = "ssr"))]

@@ -15,12 +15,16 @@ use std::env;
 #[cfg(feature = "hydrate")]
 use wasm_bindgen::JsCast;
 
-use crate::model::{Guest, House, PointAwardLog};
 #[cfg(feature = "ssr")]
 use crate::{
     award_points_to_guest, award_points_to_house, create_admin_session, get_all_active_guests,
     get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
-    get_guest_token, register_guest, reregister_guest, unregister_guest, validate_admin_token,
+    get_guest_token, get_or_init_crossword_state, register_guest, reregister_guest,
+    unregister_guest, update_crossword_state, validate_admin_token,
+};
+use crate::{
+    model::{CrosswordState, Guest, House, PointAwardLog, SparseState},
+    Direction, WordDef, CROSSWORD_DEFS,
 };
 
 #[cfg(feature = "ssr")]
@@ -387,6 +391,41 @@ pub async fn login_handler(guest_id: i32, token: String) -> Result<(), AppError>
     Ok(())
 }
 
+#[server(GetCrosswordState)]
+pub async fn get_crossword_state() -> Result<CrosswordState, AppError> {
+    let pool: DbPool = expect_context();
+    let maybe_current_user = get_current_user().await?;
+    let guest = maybe_current_user.ok_or(AppError::AuthError("Must be logged in".to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_or_init_crossword_state(&mut conn, guest.id)
+            .map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(UpdateCrosswordState)]
+pub async fn update_crossword_state_handler(sparse_state: SparseState) -> Result<(), AppError> {
+    let pool: DbPool = expect_context();
+    let maybe_current_user = get_current_user().await?;
+    let guest = maybe_current_user.ok_or(AppError::AuthError("Must be logged in".to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        let mut grid = vec![vec![None; 12]; 15];
+        for (r, c, ch) in &sparse_state.filled {
+            if *r < 15 && *c < 12 {
+                grid[*r][*c] = Some(*ch);
+            }
+        }
+        let full_state = CrosswordState::new_full_grid(grid, sparse_state.completions);
+        update_crossword_state(&mut conn, guest.id, &full_state)
+            .map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
 const WORDS: &[&str] = &[
     "apple", "bread", "break", "broad", "tread", "bleed", "dreab",
 ];
@@ -431,6 +470,7 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/admin/login") view=AdminLogin />
                     <Route path=path!("/admin") view=AdminDashboard />
                     <Route path=path!("/games/wordle") view=Wordle />
+                    <Route path=path!("/games/crossword") view=Crossword />
                 </Routes>
             </main>
         </Router>
@@ -531,7 +571,10 @@ fn Home() -> impl IntoView {
                                                     <h3>"Games and Activities"</h3>
                                                     <ul class="games-list">
                                                         <li>
-                                                            <a href="/games/wordle">"Harry Potter Wordle"</a>
+                                                            <a href="/games/wordle">"Hogwartle"</a>
+                                                        </li>
+                                                        <li>
+                                                            <a href="/games/crossword">"Horcrux Hunt"</a>
                                                         </li>
                                                     // Add other games here as they are implemented
                                                     </ul>
@@ -1765,6 +1808,156 @@ fn process_guess(
         game_over.set(true);
         message.set(format!("Game over! The word was {}", target));
     }
+}
+
+#[component]
+fn Crossword() -> impl IntoView {
+    let state_fetcher = Resource::new(|| (), |_| get_crossword_state());
+    let grid = RwSignal::new(vec![vec![None::<char>; 12]; 15]);
+    let completions = RwSignal::new([false; 7]);
+    let horcrux_clues: RwSignal<Vec<String>> = RwSignal::new(vec![]);
+
+    // On mount/load, sync state to signals.
+    Effect::new(move |_| {
+        if let Some(Ok(state)) = state_fetcher.get() {
+            grid.set(state.grid);
+            completions.set(state.completions);
+            horcrux_clues.set(
+                CROSSWORD_DEFS
+                    .iter()
+                    .map(|w| w.reveal_text.to_string())
+                    .collect(),
+            );
+        }
+    });
+
+    // Handler for cell input: update grid, check affected words reactively.
+    let on_cell_change = move |row: usize, col: usize, new_char: Option<char>| {
+        spawn_local(async move {
+            grid.update(|grid| {
+                grid[row][col] = new_char;
+            });
+
+            let mut new_completions = completions.get_untracked();
+            let current_grid = grid.get_untracked();
+            for (word_idx, word_def) in CROSSWORD_DEFS.iter().enumerate() {
+                if !new_completions[word_idx] && cell_is_in_word(word_def, row, col) {
+                    if word_is_complete(&grid.get_untracked(), word_def) {
+                        new_completions[word_idx] = true;
+                    }
+                }
+            }
+            completions.set(new_completions);
+
+            // Create a CrosswordState containing the full grid, then sparsify it and send it to
+            // the server function.
+            //
+            // The reason for doing this is because sending the full grid with
+            // Vec<Vec<Option<char>> seems to drop all None values, collapsing the grid and causing
+            // loss of positional information.
+            let full_state = CrosswordState::new_full_grid(current_grid.clone(), new_completions);
+            let sparse_state = SparseState {
+                filled: full_state.sparse.filled,
+                completions: new_completions,
+            };
+
+            let _ = update_crossword_state_handler(sparse_state).await;
+        });
+    };
+
+    // Render grid: 15 rows, 12 cols; show input only for word cells, else blend to background.
+    let grid_view = move || {
+        (0..15).map(|row| view! {
+            <div class="crossword-row">
+                {(0..12).map(move |col| {
+                    let cell_content = grid.get()[row][col];
+                    let is_input_cell = CROSSWORD_DEFS.iter().any(|w| cell_is_in_word(w, row, col));
+                    let is_frozen = completions.get().iter().enumerate().any(|(i, &c)| c && cell_is_in_word(&CROSSWORD_DEFS[i], row, col));
+                    let class = if is_input_cell { "crossword-cell" } else { "crossword-blank" };
+                    let extra_class = if is_frozen { "frozen" } else { "" };
+                    let class_str = format!("{} {}", class, extra_class);
+                    if is_input_cell && !is_frozen {
+                        let cell_value = cell_content.map_or("".to_string(), |c| c.to_string());
+                         view! {
+                             <input
+                                 class=class_str
+                                 type="text"
+                                 maxlength=1
+                                 value=cell_value.as_str()
+                                 on:input=move |ev| {
+                                     let val = event_target_value(&ev).chars().next().and_then(|c| c.to_uppercase().next());
+                                     on_cell_change(row, col, val);
+                                 }
+                                 style:display="block"
+                             />
+                         }.into_any()
+                    } else {
+                        if let Some(c) = cell_content {
+                            view! {
+                                <div class=class_str>{format!("{}", c)}</div>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <div class=class_str />
+                            }.into_any()
+                        }
+                    }
+                }).collect_view()}
+            </div>
+        }).collect_view()
+    };
+
+    // Render the 7 horcrux clues below; reveal the ones whose corresponding crossword answers are
+    // correct.
+    let horcrux_clues_view =
+        move || {
+            let clues = horcrux_clues.get();
+            let completions = completions.get();
+            clues.iter().zip(completions.iter()).map(|(clue, &completed)| {
+            view! {
+                <div class=if completed { "clue reveal" } else { "clue" }>{clue.clone()}</div>
+            }
+        }).collect_view()
+        };
+
+    view! {
+        <div class="crossword">
+            <a class="back-link" href="/">"← Home"</a>
+            <h1>"Horcrux Hunt"</h1>
+            <div class="crossword-grid">{grid_view}</div>
+            <div class="horcrux-clues">{horcrux_clues_view}</div>
+        </div>
+    }
+}
+
+fn cell_is_in_word(def: &WordDef, row: usize, col: usize) -> bool {
+    match def.dir {
+        Direction::Across => {
+            row == def.start_row && col >= def.start_col && col < def.start_col + def.len
+        }
+        Direction::Down => {
+            col == def.start_col && row >= def.start_row && row < def.start_row + def.len
+        }
+    }
+}
+
+fn word_is_complete(grid: &Vec<Vec<Option<char>>>, def: &WordDef) -> bool {
+    for i in 0..def.len {
+        let r = match def.dir {
+            Direction::Across => def.start_row,
+            Direction::Down => def.start_row + i,
+        };
+        let c = match def.dir {
+            Direction::Across => def.start_col + i,
+            Direction::Down => def.start_col,
+        };
+        let cell = grid[r][c];
+        let expected = def.answer.as_bytes()[i] as char;
+        if cell != Some(expected) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

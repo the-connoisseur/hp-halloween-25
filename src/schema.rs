@@ -1,5 +1,4 @@
-// @generated automatically by Diesel CLI, then modified by hand to remove Nullable almost
-// everywhere.
+// @generated automatically by Diesel CLI.
 
 diesel::table! {
     admin_sessions (id) {
@@ -7,6 +6,15 @@ diesel::table! {
         token -> Text,
         created_at -> Timestamp,
         expires_at -> Nullable<Timestamp>,
+    }
+}
+
+diesel::table! {
+    crossword_states (id) {
+        id -> Integer,
+        guest_id -> Integer,
+        state -> Text,
+        updated_at -> Timestamp,
     }
 }
 
@@ -51,6 +59,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(crossword_states -> guests (guest_id));
 diesel::joinable!(guests -> houses (house_id));
 diesel::joinable!(point_awards -> guests (guest_id));
 diesel::joinable!(point_awards -> houses (house_id));
@@ -58,6 +67,7 @@ diesel::joinable!(sessions -> guests (guest_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     admin_sessions,
+    crossword_states,
     guests,
     houses,
     point_awards,

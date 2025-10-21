@@ -2,6 +2,8 @@ use chrono::NaiveDateTime;
 #[cfg(feature = "ssr")]
 use diesel::prelude::*;
 #[cfg(feature = "ssr")]
+use diesel::sql_types::Text;
+#[cfg(feature = "ssr")]
 use diesel::sqlite::Sqlite;
 use serde::{Deserialize, Serialize};
 
@@ -111,4 +113,108 @@ pub struct PointAwardLog {
     pub amount: i32,
     pub reason: String,
     pub awarded_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SparseGrid {
+    // List of (row, col, char) for non-None cells.
+    pub filled: Vec<(usize, usize, char)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SparseState {
+    pub filled: Vec<(usize, usize, char)>,
+    pub completions: [bool; 7],
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Queryable, Insertable, Debug)]
+#[diesel(table_name = crate::schema::crossword_states)]
+pub struct DbCrosswordState {
+    pub id: i32,
+    pub guest_id: i32,
+    #[diesel(sql_type = Text)]
+    pub state: String,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = crate::schema::crossword_states)]
+pub struct NewDbCrosswordState {
+    pub guest_id: i32,
+    pub state: String,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CrosswordState {
+    // 15 rows x 12 cols; None = unfilled, Some(char) = filled
+    pub grid: Vec<Vec<Option<char>>>,
+    // Sparse state of grid (for send).
+    pub sparse: SparseGrid,
+    // Which of the 7 words are completed correctly
+    pub completions: [bool; 7],
+}
+
+impl CrosswordState {
+    pub fn new_full_grid(grid: Vec<Vec<Option<char>>>, completions: [bool; 7]) -> Self {
+        let sparse = Self::build_sparse(&grid);
+        Self {
+            grid,
+            sparse,
+            completions,
+        }
+    }
+
+    pub fn to_sparse(&self) -> SparseGrid {
+        Self::build_sparse(&self.grid)
+    }
+
+    fn build_sparse(grid: &Vec<Vec<Option<char>>>) -> SparseGrid {
+        let mut filled = Vec::new();
+        for (row, row_vec) in grid.iter().enumerate() {
+            for (col, &cell) in row_vec.iter().enumerate() {
+                if let Some(c) = cell {
+                    filled.push((row, col, c));
+                }
+            }
+        }
+        SparseGrid { filled }
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<CrosswordState> for String {
+    fn from(state: CrosswordState) -> Self {
+        let sparse = SparseState {
+            filled: state.sparse.filled,
+            completions: state.completions,
+        };
+        serde_json::to_string(&sparse).expect("Failed to serialize sparse state")
+    }
+}
+
+#[cfg(feature = "ssr")]
+impl From<String> for CrosswordState {
+    fn from(json: String) -> Self {
+        print!("Deserializing CrosswordState");
+        let sparse: SparseState = serde_json::from_str(&json).unwrap_or_default();
+        print!("Deserialized CrosswordState");
+        let mut grid = vec![vec![None; 12]; 15];
+        for (r, c, ch) in &sparse.filled {
+            if *r < 15 && *c < 12 {
+                grid[*r][*c] = Some(*ch);
+            }
+        }
+        let sparse_grid = SparseGrid {
+            filled: sparse.filled,
+        };
+
+        Self {
+            grid,
+            sparse: sparse_grid,
+            completions: sparse.completions,
+        }
+    }
 }
