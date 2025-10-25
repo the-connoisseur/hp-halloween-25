@@ -878,7 +878,7 @@ fn AdminDashboard() -> impl IntoView {
                     {
                         // Trigger the sort server.
                         let sort_url =
-                            format!("http://192.168.1.176/sort?house={}", assigned_house_id);
+                            format!("http://192.168.1.176/flash?house={}", assigned_house_id);
                         let window = web_sys::window().expect("window");
 
                         let init = web_sys::RequestInit::new();
