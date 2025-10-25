@@ -21,3 +21,6 @@ Cargo.lock
 **/diesel.toml
 **/*.db*
 **/migrations/.keep
+
+# Notes
+notes/
