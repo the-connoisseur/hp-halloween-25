@@ -1313,16 +1313,14 @@ fn AdminDashboard() -> impl IntoView {
                                     <table class="admin-table">
                                         <tbody>
                                             <tr>
-                                                <th>"ID"</th>
                                                 <th>"Name"</th>
                                                 <th>"House"</th>
-                                                <th>"Score"</th>
-                                                <th>"Actions"</th>
+                                                <th>""</th>
                                             </tr>
                                             <Suspense fallback=|| {
                                                 view! {
                                                     <tr>
-                                                        <td colspan="5">"Loading..."</td>
+                                                        <td colspan="3">"Loading..."</td>
                                                     </tr>
                                                 }
                                             }>
@@ -1333,7 +1331,7 @@ fn AdminDashboard() -> impl IntoView {
                                                                 if guests.is_empty() {
                                                                     return view! {
                                                                         <tr>
-                                                                            <td colspan="5">"No active guests"</td>
+                                                                            <td colspan="3">"No active guests"</td>
                                                                         </tr>
                                                                     }
                                                                         .into_any();
@@ -1344,7 +1342,6 @@ fn AdminDashboard() -> impl IntoView {
                                                                         let id = guest.id;
                                                                         view! {
                                                                             <tr>
-                                                                                <td>{format!("{}", guest.id)}</td>
                                                                                 <td>{guest.name.clone()}</td>
                                                                                 <td>
                                                                                     {houses_fetcher
@@ -1359,7 +1356,6 @@ fn AdminDashboard() -> impl IntoView {
                                                                                                 .unwrap_or_else(|| "Unknown".to_string())
                                                                                         })}
                                                                                 </td>
-                                                                                <td>{format!("{}", guest.personal_score)}</td>
                                                                                 <td>
                                                                                     <button
                                                                                         class="btn-secondary"
@@ -1380,7 +1376,7 @@ fn AdminDashboard() -> impl IntoView {
                                                             _ => {
                                                                 view! {
                                                                     <tr>
-                                                                        <td colspan="5">"Loading..."</td>
+                                                                        <td colspan="3">"Loading..."</td>
                                                                     </tr>
                                                                 }
                                                                     .into_view()
@@ -1400,11 +1396,8 @@ fn AdminDashboard() -> impl IntoView {
                                     <table class="admin-table">
                                         <tbody>
                                             <tr>
-                                                <th>ID</th>
-                                                <th>Guest</th>
                                                 <th>House</th>
                                                 <th>Amount</th>
-                                                <th>Reason</th>
                                                 <th>Time</th>
                                             </tr>
                                             <Suspense>
@@ -1417,16 +1410,11 @@ fn AdminDashboard() -> impl IntoView {
                                                                     .map(|award| {
                                                                         view! {
                                                                             <tr>
-                                                                                <td>{award.id}</td>
-                                                                                <td>
-                                                                                    {award.guest_name.clone().unwrap_or("N/A".to_string())}
-                                                                                </td>
                                                                                 <td>
                                                                                     {award.house_name.clone().unwrap_or("N/A".to_string())}
                                                                                 </td>
                                                                                 <td>{award.amount}</td>
-                                                                                <td>{award.reason.clone()}</td>
-                                                                                <td>{award.awarded_at.to_string()}</td>
+                                                                                <td>{award.awarded_at.format("%H:%M:%S").to_string()}</td>
                                                                             </tr>
                                                                         }
                                                                     })
