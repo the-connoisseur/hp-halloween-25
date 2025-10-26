@@ -17,10 +17,10 @@ use wasm_bindgen::JsCast;
 
 #[cfg(feature = "ssr")]
 use crate::{
-    award_points_to_guest, award_points_to_house, create_admin_session, get_all_active_guests,
-    get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
-    get_guest_token, get_or_init_crossword_state, register_guest, reregister_guest,
-    unregister_guest, update_crossword_state, validate_admin_token,
+    award_points_to_house, create_admin_session, get_all_active_guests, get_all_houses,
+    get_all_point_awards, get_all_unregistered_guests, get_guest_by_token, get_guest_token,
+    get_or_init_crossword_state, register_guest, reregister_guest, unregister_guest,
+    update_crossword_state, validate_admin_token,
 };
 use crate::{
     model::{CrosswordState, Guest, House, PointAwardLog, SparseState},
@@ -278,26 +278,6 @@ pub async fn reregister_guest_handler(
             reregister_guest(&mut conn, guest_id, new_house_id, new_character.as_deref())
                 .map_err(|e| AppError::DbError(e.to_string()))?;
         Ok(token)
-    })
-    .await
-    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
-}
-
-#[server(AwardPointsToGuest)]
-pub async fn award_points_to_guest_handler(
-    guest_id: i32,
-    amount: i32,
-    reason: String,
-) -> Result<(), AppError> {
-    check_admin().await?;
-
-    let pool: DbPool = expect_context();
-
-    tokio::task::spawn_blocking(move || {
-        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
-        award_points_to_guest(&mut conn, guest_id, amount, &reason)
-            .map(|_| ())
-            .map_err(|e| AppError::DbError(e.to_string()))
     })
     .await
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
@@ -1018,48 +998,9 @@ fn AdminDashboard() -> impl IntoView {
         }
     };
 
-    // Signals related to awarding points to a guest.
-    let award_guest_id = RwSignal::new(0i32);
-    let award_guest_amount = RwSignal::new(0i32);
-    let award_guest_reason = RwSignal::new(String::new());
-    let award_guest_error = RwSignal::new(String::new());
-
-    // A handler for the award guest points submit button. Attempts to award points to the specified
-    // guest. On success, clears any errors and refreshes resources.
-    let award_guest_submit = move |ev: SubmitEvent| {
-        ev.prevent_default();
-        let guest_id = award_guest_id.get();
-        let amount = award_guest_amount.get();
-        let reason = award_guest_reason.get();
-        if guest_id == 0 || reason.is_empty() {
-            award_guest_error.set("Guest and reason are required.".to_string());
-            return;
-        }
-        if amount == 0 {
-            award_guest_error.set("Amount cannot be zero.".to_string());
-            return;
-        }
-        spawn_local(async move {
-            match award_points_to_guest_handler(guest_id, amount, reason).await {
-                Ok(_) => {
-                    award_guest_error.set(String::new());
-                    award_guest_id.set(0i32);
-                    award_guest_amount.set(0i32);
-                    award_guest_reason.set(String::new());
-
-                    active_guests_fetcher.refetch();
-                    houses_fetcher.refetch();
-                    point_awards_fetcher.refetch();
-                }
-                Err(e) => award_guest_error.set(e.to_string()),
-            }
-        });
-    };
-
     // Signals related to awarding points to a house.
     let award_house_id = RwSignal::new(0i32);
     let award_house_amount = RwSignal::new(0i32);
-    let award_house_reason = RwSignal::new(String::new());
     let award_house_error = RwSignal::new(String::new());
 
     // A handler for the award house points submit button. Attempts to award points to the specified
@@ -1068,9 +1009,8 @@ fn AdminDashboard() -> impl IntoView {
         ev.prevent_default();
         let house_id = award_house_id.get();
         let amount = award_house_amount.get();
-        let reason = award_house_reason.get();
-        if house_id == 0 || reason.is_empty() {
-            award_house_error.set("House and reason are required.".to_string());
+        if house_id == 0 {
+            award_house_error.set("House is required.".to_string());
             return;
         }
         if amount == 0 {
@@ -1078,12 +1018,11 @@ fn AdminDashboard() -> impl IntoView {
             return;
         }
         spawn_local(async move {
-            match award_points_to_house_handler(house_id, amount, reason).await {
+            match award_points_to_house_handler(house_id, amount, "Admin".to_string()).await {
                 Ok(_) => {
                     award_house_error.set(String::new());
                     award_house_id.set(0i32);
                     award_house_amount.set(0i32);
-                    award_house_reason.set(String::new());
 
                     active_guests_fetcher.refetch();
                     houses_fetcher.refetch();
@@ -1299,89 +1238,6 @@ fn AdminDashboard() -> impl IntoView {
                             </section>
 
                             <section class="admin-section">
-                                <h2>"Award Points to Guest"</h2>
-                                <form class="admin-form" on:submit=award_guest_submit>
-                                    <div class="form-group">
-                                        <label>
-                                            "Guest: "
-                                            <select
-                                                class="form-select"
-                                                prop:value=move || award_guest_id.get().to_string()
-                                                on:change=move |ev| {
-                                                    award_guest_id
-                                                        .set(event_target_value(&ev).parse().unwrap_or(0))
-                                                }
-                                            >
-                                                <option value="0">"Select guest"</option>
-                                                <Suspense fallback=|| {
-                                                    view! { <option>"Loading..."</option> }
-                                                }>
-                                                    {move || {
-                                                        active_guests_fetcher
-                                                            .with(|maybe_result| match maybe_result {
-                                                                Some(Ok(guests)) => {
-                                                                    guests
-                                                                        .iter()
-                                                                        .map(|guest| {
-                                                                            view! {
-                                                                                <option value=guest
-                                                                                    .id
-                                                                                    .to_string()>{guest.name.clone()}</option>
-                                                                            }
-                                                                        })
-                                                                        .collect_view()
-                                                                        .into_any()
-                                                                }
-                                                                _ => view! { <option>"Error"</option> }.into_any(),
-                                                            })
-                                                    }}
-                                                </Suspense>
-                                            </select>
-                                        </label>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>
-                                            "Amount: "
-                                            <input
-                                                class="form-input"
-                                                type="number"
-                                                prop:value=move || format!("{}", award_guest_amount.get())
-                                                on:input=move |ev| {
-                                                    if let Ok(value) = event_target_value(&ev).parse::<i32>() {
-                                                        award_guest_amount.set(value);
-                                                    }
-                                                }
-                                            />
-                                        </label>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>
-                                            "Reason: "
-                                            <input
-                                                class="form-input"
-                                                type="text"
-                                                prop:value=move || award_guest_reason.get()
-                                                on:input=move |ev| {
-                                                    award_guest_reason.set(event_target_value(&ev))
-                                                }
-                                            />
-                                        </label>
-                                    </div>
-                                    <button type="submit" class="btn-primary">
-                                        "Award Points"
-                                    </button>
-                                </form>
-                                {move || {
-                                    if !award_guest_error.get().is_empty() {
-                                        view! { <p class="error">{award_guest_error.get()}</p> }
-                                            .into_any()
-                                    } else {
-                                        view! {}.into_view().into_any()
-                                    }
-                                }}
-                            </section>
-
-                            <section class="admin-section">
                                 <h2>"Award Points to House"</h2>
                                 <form class="admin-form" on:submit=award_house_submit>
                                     <div class="form-group">
@@ -1433,19 +1289,6 @@ fn AdminDashboard() -> impl IntoView {
                                                     if let Ok(value) = event_target_value(&ev).parse::<i32>() {
                                                         award_house_amount.set(value);
                                                     }
-                                                }
-                                            />
-                                        </label>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>
-                                            "Reason: "
-                                            <input
-                                                class="form-input"
-                                                prop:value=move || award_house_reason.get()
-                                                type="text"
-                                                on:input=move |ev| {
-                                                    award_house_reason.set(event_target_value(&ev))
                                                 }
                                             />
                                         </label>
