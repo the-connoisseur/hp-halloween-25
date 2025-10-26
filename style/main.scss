@@ -447,6 +447,11 @@ body {
   border-left: 4px solid #ff6b6b;
 }
 
+.token-qr-section {
+  margin-top: 10px;
+  text-align: center;
+}
+
 // Highlights generated tokens with yellow text, dark background, padding,
 // rounded corners, and monospace font for easy copying; uses word-break to
 // handle long strings.
@@ -459,6 +464,31 @@ body {
   font-family: monospace;
   cursor: pointer;
   text-align: center;
+}
+
+.qr-container {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #2a2a2b;
+  border-radius: 4px;
+  border: 1px solid #3a3a3c;
+
+  h4 {
+    margin: 0 0 10px 0;
+    color: #b59f3a;
+    font-size: 1.1em;
+  }
+
+  // Ensures SVG renders crisply and centered.
+  div {
+    display: inline-block;
+    text-align: center;
+  }
+
+  svg {
+    display: block;
+    margin: 0 auto;
+  }
 }
 
 // Adds horizontal overflow scrolling for tables on small screens, with vertical

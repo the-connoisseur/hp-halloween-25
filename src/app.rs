@@ -5,9 +5,10 @@ use leptos::task::spawn_local;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::{
     components::{Route, Router, Routes},
-    hooks::use_navigate,
+    hooks::{use_navigate, use_query_map},
     path, NavigateOptions,
 };
+use qrcode::render::svg;
 use rand::prelude::*;
 use rand::rng;
 use std::collections::HashMap;
@@ -229,22 +230,40 @@ pub async fn register_guest_handler(
     guest_id: i32,
     house_id: i32,
     character: String,
-) -> Result<(String, i32), AppError> {
+) -> Result<(String, i32, String), AppError> {
     check_admin().await?;
 
     let pool: DbPool = expect_context();
 
-    tokio::task::spawn_blocking(move || {
+    let (token, assigned_house_id) = tokio::task::spawn_blocking(move || {
         let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
         let effective_house_id = if house_id == 0 { None } else { Some(house_id) };
         let (guest, token) = register_guest(&mut conn, guest_id, effective_house_id, &character)
             .map_err(|e| AppError::DbError(e.to_string()))?;
         // Registered guests should have a house assigned. Panic if they don't.
         let assigned_house_id = guest.house_id.unwrap();
-        Ok((token, assigned_house_id))
+        Ok::<(std::string::String, i32), AppError>((token, assigned_house_id))
     })
     .await
-    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))??;
+
+    let base_url = "http://192.168.1.118:3000";
+    let login_url = format!("{}/login?guest_id={}&token={}", base_url, guest_id, token);
+
+    let qr_code = qrcode::QrCode::new(login_url.as_bytes()).map_err(|e| {
+        AppError::ServerFnError(ServerFnErrorErr::ServerError(format!(
+            "QR generation failed: {}",
+            e
+        )))
+    })?;
+    let qr_svg = qr_code
+        .render::<svg::Color<'_>>()
+        .min_dimensions(200, 200)
+        .dark_color(svg::Color("#000000"))
+        .light_color(svg::Color("#FFFFFF"))
+        .build();
+
+    Ok((token, assigned_house_id, qr_svg))
 }
 
 #[server(UnregisterGuest)]
@@ -660,6 +679,34 @@ fn Login() -> impl IntoView {
     let current_user_fetcher = Resource::new(|| (), |_| get_current_user());
     let is_admin_fetcher = Resource::new(|| (), |_| is_admin());
 
+    let is_auto_login = RwSignal::new(false);
+    let query_map = use_query_map();
+    let navigate = use_navigate();
+
+    Effect::new(move |_| {
+        let current_params = query_map.read();
+        if let (Some(guest_id_str), Some(token_str)) =
+            (current_params.get("guest_id"), current_params.get("token"))
+        {
+            if let Ok(guest_id) = guest_id_str.as_str().parse::<i32>() {
+                let token = token_str.clone();
+                is_auto_login.set(true);
+                let nav = navigate.clone();
+                spawn_local(async move {
+                    is_auto_login.set(false);
+                    match login_handler(guest_id, token).await {
+                        Ok(_) => {
+                            nav("/", NavigateOptions::default());
+                        }
+                        Err(e) => {
+                            error.set(format!("Auto-login failed: {}", e));
+                        }
+                    }
+                });
+            }
+        }
+    });
+
     let submit = move |ev: SubmitEvent| {
         ev.prevent_default();
         let g = selected_guest.get();
@@ -702,71 +749,82 @@ fn Login() -> impl IntoView {
                 "← Home"
             </a>
             <h1>"Login"</h1>
-            <form class="admin-form" on:submit=submit>
-                <div class="form-group">
-                    <label>
-                        "Guest: "
-                        <select
-                            class="form-select"
-                            on:change=move |ev| {
-                                let val = event_target_value(&ev).parse::<i32>().unwrap_or(0);
-                                selected_guest.set(val);
-                            }
-                        >
-                            <option value="0">"Select your name"</option>
-                            <Suspense fallback=|| {
-                                view! { "Loading..." }
-                            }>
-                                {move || {
-                                    guests_fetcher
-                                        .with(move |opt_res| {
-                                            match opt_res {
-                                                None => view! { "Loading..." }.into_any(),
-                                                Some(res) => {
-                                                    match res {
-                                                        Ok(guests) => {
-                                                            guests
-                                                                .iter()
-                                                                .map(|guest| {
-                                                                    view! {
-                                                                        <option value=guest
-                                                                            .id
-                                                                            .to_string()>{guest.name.clone()}</option>
+            {move || {
+                if is_auto_login.get() {
+                    view! { <p class="centered">"Auto-logging in..."</p> }.into_any()
+                } else {
+                    view! {
+                        <form class="admin-form" on:submit=submit>
+                            <div class="form-group">
+                                <label>
+                                    "Guest: "
+                                    <select
+                                        class="form-select"
+                                        on:change=move |ev| {
+                                            let val = event_target_value(&ev)
+                                                .parse::<i32>()
+                                                .unwrap_or(0);
+                                            selected_guest.set(val);
+                                        }
+                                    >
+                                        <option value="0">"Select your name"</option>
+                                        <Suspense fallback=|| {
+                                            view! { "Loading..." }
+                                        }>
+                                            {move || {
+                                                guests_fetcher
+                                                    .with(move |opt_res| {
+                                                        match opt_res {
+                                                            None => view! { "Loading..." }.into_any(),
+                                                            Some(res) => {
+                                                                match res {
+                                                                    Ok(guests) => {
+                                                                        guests
+                                                                            .iter()
+                                                                            .map(|guest| {
+                                                                                view! {
+                                                                                    <option value=guest
+                                                                                        .id
+                                                                                        .to_string()>{guest.name.clone()}</option>
+                                                                                }
+                                                                            })
+                                                                            .collect_view()
+                                                                            .into_any()
                                                                     }
-                                                                })
-                                                                .collect_view()
-                                                                .into_any()
-                                                        }
-                                                        Err(e) => {
-                                                            view! {
-                                                                "Error loading guests: "
-                                                                {e.to_string()}
+                                                                    Err(e) => {
+                                                                        view! {
+                                                                            "Error loading guests: "
+                                                                            {e.to_string()}
+                                                                        }
+                                                                            .into_any()
+                                                                    }
+                                                                }
                                                             }
-                                                                .into_any()
                                                         }
-                                                    }
-                                                }
-                                            }
-                                        })
-                                }}
-                            </Suspense>
-                        </select>
-                    </label>
-                </div>
-                <div class="form-group">
-                    <label>
-                        "Token: "
-                        <input
-                            class="form-input"
-                            type="text"
-                            on:input=move |ev| token.set(event_target_value(&ev))
-                        />
-                    </label>
-                </div>
-                <button class="btn-primary" type="submit">
-                    "Login"
-                </button>
-            </form>
+                                                    })
+                                            }}
+                                        </Suspense>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    "Token: "
+                                    <input
+                                        class="form-input"
+                                        type="text"
+                                        on:input=move |ev| token.set(event_target_value(&ev))
+                                    />
+                                </label>
+                            </div>
+                            <button class="btn-primary" type="submit">
+                                "Login"
+                            </button>
+                        </form>
+                    }
+                        .into_any()
+                }
+            }}
             {move || (!error.get().is_empty()).then(|| view! { <p>{error.get()}</p> })}
         </div>
     }
@@ -872,6 +930,14 @@ fn AdminDashboard() -> impl IntoView {
     let new_guest_house = RwSignal::new(0i32);
     let register_error = RwSignal::new(String::new());
     let registered_token = RwSignal::new(String::new());
+    let qr_svg = RwSignal::new(String::new());
+
+    Effect::new(move |_| {
+        if register_error.get_untracked().is_empty() && registered_token.get_untracked().is_empty()
+        {
+            qr_svg.set(String::new()); // Clears QR when form is reset.
+        }
+    });
 
     // A handler for the register new guest submit button. Attempts to register a new guest with
     // the provided details. On success, it clears any errors and sets the session token.
@@ -886,9 +952,10 @@ fn AdminDashboard() -> impl IntoView {
         }
         spawn_local(async move {
             match register_guest_handler(guest_id, house_id, character).await {
-                Ok((token, assigned_house_id)) => {
+                Ok((token, assigned_house_id, qr_svg_str)) => {
                     register_error.set(String::new());
                     registered_token.set(token.clone());
+                    qr_svg.set(qr_svg_str);
                     selected_guest_id.set(0i32);
                     new_guest_character.set(String::new());
 
@@ -1124,7 +1191,13 @@ fn AdminDashboard() -> impl IntoView {
                                 {move || {
                                     if !registered_token.get().is_empty() {
                                         view! {
-                                            <p class="token-display">{registered_token.get()}</p>
+                                            <div class="token-qr-section">
+                                                <p class="token-display">{registered_token.get()}</p>
+                                                <div class="qr-container">
+                                                    <h4>"Scan QR to login"</h4>
+                                                    <div inner_html=qr_svg.get() />
+                                                </div>
+                                            </div>
                                         }
                                             .into_any()
                                     } else {
