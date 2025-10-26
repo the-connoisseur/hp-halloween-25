@@ -508,44 +508,38 @@ fn Home() -> impl IntoView {
         }
     });
 
+    let games_section = move || {
+        current_user_fetcher
+            .get()
+            .and_then(|res| res.ok())
+            .flatten()
+            .map(|_| {
+                view! {
+                    <section class="home-section">
+                        <h3>"Games and Activities"</h3>
+                        <ul>
+                            <li>
+                                <a href="/games/wordle">"Hogwartle"</a>
+                            </li>
+                            <li>
+                                <a href="/games/crossword">"Horcrux Hunt"</a>
+                            </li>
+                        </ul>
+                    </section>
+                }
+                .into_any()
+            })
+            .unwrap_or_else(|| view! { <></> }.into_any())
+    };
+
     view! {
         <div class=move || format!("home-container {}", house_class.get())>
-            <h1>"Hogwarts Halloween Party"</h1>
+            // Main header.
+            <h1 class="main-header">"Hogwarts Halloween"</h1>
+
+            // Welcome/login at the top.
             <Suspense fallback=|| {
-                view! { "Loading..." }
-            }>
-                {move || {
-                    houses_fetcher
-                        .with(|h_res| match h_res {
-                            Some(Ok(houses)) => {
-                                view! {
-                                    <section class="home-section">
-                                        <h2>"House Scores"</h2>
-                                        <ul>
-                                            {houses
-                                                .iter()
-                                                .map(|house| {
-                                                    view! { <li>{house.name.clone()}: {house.score}</li> }
-                                                })
-                                                .collect_view()}
-                                        </ul>
-                                    </section>
-                                }
-                                    .into_any()
-                            }
-                            _ => {
-                                view! {
-                                    <section class="house-section">
-                                        <p>"Error loading houses"</p>
-                                    </section>
-                                }
-                                    .into_any()
-                            }
-                        })
-                }}
-            </Suspense>
-            <Suspense fallback=|| {
-                view! { "Checking login..." }
+                view! { <p class="centered">"Checking login..."</p> }
             }>
                 {move || {
                     current_user_fetcher
@@ -560,31 +554,20 @@ fn Home() -> impl IntoView {
                                             let house_name = house_opt
                                                 .map(|h| h.name.clone())
                                                 .unwrap_or("Unknown".to_string());
+                                            // Welcome section: split into two centered lines.
                                             view! {
-                                                <section class="home-section">
-                                                    <h2>
-                                                        "Welcome, " {guest.name.clone()} " to " {house_name}
+                                                <section class="welcome-section centered">
+                                                    <h2 class="welcome-text">
+                                                        "Welcome, " {guest.name.clone()}
                                                     </h2>
-                                                    <p>"Your personal score: " {guest.personal_score}</p>
-                                                </section>
-                                                <section class="home-section">
-                                                    <h3>"Games and Activities"</h3>
-                                                    <ul class="games-list">
-                                                        <li>
-                                                            <a href="/games/wordle">"Hogwartle"</a>
-                                                        </li>
-                                                        <li>
-                                                            <a href="/games/crossword">"Horcrux Hunt"</a>
-                                                        </li>
-                                                    // Add other games here as they are implemented
-                                                    </ul>
+                                                    <h2 class="to-house-text">"to " {house_name}</h2>
                                                 </section>
                                             }
                                                 .into_any()
                                         }
                                         _ => {
                                             view! {
-                                                <section class="home-section">
+                                                <section class="welcome-section centered">
                                                     <p>"Error loading houses"</p>
                                                 </section>
                                             }
@@ -594,7 +577,7 @@ fn Home() -> impl IntoView {
                             }
                             _ => {
                                 view! {
-                                    <section class="home-section">
+                                    <section class="login-section centered">
                                         <p>
                                             <a href="/login">"Login"</a>
                                         </p>
@@ -605,6 +588,84 @@ fn Home() -> impl IntoView {
                         })
                 }}
             </Suspense>
+
+            // House scores section, rendered unconditionally.
+            <Suspense fallback=|| {
+                view! {
+                    <section class="house-scores centered">
+                        <p>"Loading house scores"</p>
+                    </section>
+                }
+            }>
+                {move || {
+                    houses_fetcher
+                        .with(|h_res| match h_res {
+                            Some(Ok(houses)) => {
+                                view! {
+                                    <section class="house-scores centered">
+                                        <h2>"House Scores"</h2>
+                                        <div class="scores-grid">
+                                            {houses
+                                                .iter()
+                                                .map(|house| {
+                                                    let bg_class = format!(
+                                                        "house-box {}",
+                                                        match house.id {
+                                                            1 => "gryffindor-bg",
+                                                            2 => "hufflepuff-bg",
+                                                            3 => "ravenclaw-bg",
+                                                            4 => "slytherin-bg",
+                                                            _ => "",
+                                                        },
+                                                    );
+                                                    let text_color_class = match house.id {
+                                                        1 => "gryffindor-text",
+                                                        2 => "hufflepuff-text",
+                                                        3 => "ravenclaw-text",
+                                                        4 => "slytherin-text",
+                                                        _ => "",
+                                                    };
+                                                    let display_name = house.name.to_uppercase();
+                                                    // Computes background class based on house ID.
+                                                    // Maps house ID to secondary text color class.
+                                                    // Gold
+                                                    // Black
+                                                    // Bronze
+                                                    // Silver
+                                                    // Capitalizes house name for display.
+                                                    view! {
+                                                        <div class="score-row">
+                                                            <div class=bg_class>
+                                                                <span class=text_color_class>{display_name}</span>
+                                                            </div>
+                                                            <div class="score-display">
+                                                                <span class="score-number">{house.score}</span>
+                                                            </div>
+                                                        </div>
+                                                    }
+                                                })
+                                                .collect_view()}
+                                        </div>
+                                    </section>
+                                }
+                                    .into_any()
+                            }
+                            _ => {
+                                view! {
+                                    <section class="house-scores centered">
+                                        <p>"Error loading houses"</p>
+                                    </section>
+                                }
+                                    .into_any()
+                            }
+                        })
+                }}
+            </Suspense>
+
+            // Games section, rendered conditionally if user is logged in.
+            <Suspense fallback=|| view! { <></> }>{games_section}</Suspense>
+
+            // Admin link.
             <Suspense>
                 {move || {
                     is_admin_fetcher
@@ -1869,60 +1930,71 @@ fn Crossword() -> impl IntoView {
     let grid_view = move || {
         (0..15).map(|row| view! {
             <div class="crossword-row">
-                {(0..12).map(move |col| {
-                    let cell_content = grid.get()[row][col];
-                    let is_input_cell = CROSSWORD_DEFS.iter().any(|w| cell_is_in_word(w, row, col));
-                    let is_frozen = completions.get().iter().enumerate().any(|(i, &c)| c && cell_is_in_word(&CROSSWORD_DEFS[i], row, col));
-                    let class = if is_input_cell { "crossword-cell" } else { "crossword-blank" };
-                    let extra_class = if is_frozen { "frozen" } else { "" };
-                    let class_str = format!("{} {}", class, extra_class);
-                    if is_input_cell && !is_frozen {
-                        let cell_value = cell_content.map_or("".to_string(), |c| c.to_string());
-                         view! {
-                             <input
-                                 class=class_str
-                                 type="text"
-                                 maxlength=1
-                                 value=cell_value.as_str()
-                                 on:input=move |ev| {
-                                     let val = event_target_value(&ev).chars().next().and_then(|c| c.to_uppercase().next());
-                                     on_cell_change(row, col, val);
-                                 }
-                                 style:display="block"
-                             />
-                         }.into_any()
-                    } else {
-                        if let Some(c) = cell_content {
-                            view! {
-                                <div class=class_str>{format!("{}", c)}</div>
-                            }.into_any()
+                {(0..12)
+                    .map(move |col| {
+                        let cell_content = grid.get()[row][col];
+                        let is_input_cell = CROSSWORD_DEFS
+                            .iter()
+                            .any(|w| cell_is_in_word(w, row, col));
+                        let is_frozen = completions
+                            .get()
+                            .iter()
+                            .enumerate()
+                            .any(|(i, &c)| c && cell_is_in_word(&CROSSWORD_DEFS[i], row, col));
+                        let class = if is_input_cell {
+                            "crossword-cell"
                         } else {
+                            "crossword-blank"
+                        };
+                        let extra_class = if is_frozen { "frozen" } else { "" };
+                        let class_str = format!("{} {}", class, extra_class);
+                        if is_input_cell && !is_frozen {
+                            let cell_value = cell_content.map_or("".to_string(), |c| c.to_string());
                             view! {
-                                <div class=class_str />
-                            }.into_any()
+                                <input
+                                    class=class_str
+                                    type="text"
+                                    maxlength=1
+                                    value=cell_value.as_str()
+                                    on:input=move |ev| {
+                                        let val = event_target_value(&ev)
+                                            .chars()
+                                            .next()
+                                            .and_then(|c| c.to_uppercase().next());
+                                        on_cell_change(row, col, val);
+                                    }
+                                    style:display="block"
+                                />
+                            }
+                                .into_any()
+                        } else {
+                            if let Some(c) = cell_content {
+                                view! { <div class=class_str>{format!("{}", c)}</div> }.into_any()
+                            } else {
+                                view! { <div class=class_str /> }.into_any()
+                            }
                         }
-                    }
-                }).collect_view()}
+                    })
+                    .collect_view()}
             </div>
         }).collect_view()
     };
 
     // Render the 7 horcrux clues below; reveal the ones whose corresponding crossword answers are
     // correct.
-    let horcrux_clues_view =
-        move || {
-            let clues = horcrux_clues.get();
-            let completions = completions.get();
-            clues.iter().zip(completions.iter()).map(|(clue, &completed)| {
-            view! {
-                <div class=if completed { "clue reveal" } else { "clue" }>{clue.clone()}</div>
-            }
+    let horcrux_clues_view = move || {
+        let clues = horcrux_clues.get();
+        let completions = completions.get();
+        clues.iter().zip(completions.iter()).map(|(clue, &completed)| {
+            view! { <div class=if completed { "clue reveal" } else { "clue" }>{clue.clone()}</div> }
         }).collect_view()
-        };
+    };
 
     view! {
         <div class="crossword">
-            <a class="back-link" href="/">"← Home"</a>
+            <a class="back-link" href="/">
+                "← Home"
+            </a>
             <h1>"Horcrux Hunt"</h1>
             <div class="crossword-grid">{grid_view}</div>
             <div class="horcrux-clues">{horcrux_clues_view}</div>

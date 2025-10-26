@@ -50,6 +50,155 @@ body {
   }
 }
 
+.main-header {
+  text-align: center;
+  margin-bottom: 20px;
+  font-size: 2.5em;
+}
+
+.welcome-section.centered {
+  text-align: center;
+  margin-bottom: 30px;
+  padding: 20px;
+  background-color: #121213;
+  border-radius: 4px;
+  border: 1px solid #3a3a3c;
+
+  .welcome-text,
+  .to-house-text {
+    margin: 0;
+    font-size: 1.5em;
+    color: #f5f5f5;
+  }
+
+  .to-house-text {
+    margin-top: 5px; // Small gap between the two lines.
+  }
+}
+
+.login-section.centered {
+  text-align: center;
+  margin-bottom: 30px;
+  padding: 20px;
+  background-color: #121213;
+  border-radius: 4px;
+  border: 1px solid #3a3a3c;
+
+  a {
+    color: #b59f3a;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.house-scores.centered {
+  text-align: center;
+  margin-bottom: 30px;
+  padding: 20px;
+  background-color: #121213;
+  border-radius: 4px;
+  border: 1px solid #3a3a3c;
+
+  h2 {
+    margin-top: 0;
+    text-align: center;
+  }
+
+  ul {
+    display: inline-block; // Centers the list as a block while keeping internal left alignment for readability.
+    text-align: left;
+    list-style: none;
+    padding: 0;
+    margin: 10px auto;
+
+    li {
+      margin: 10px 0;
+      padding: 8px;
+      background-color: #1a1a1b;
+      border-radius: 4px;
+      border-left: 4px solid #538d4e; // Green accent for list items
+      text-align: left; // Ensures house name:score is left-aligned within li.
+    }
+  }
+
+  .scores-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px; // Vertical spacing between rows.
+    align-items: center; // Centers the rows horizontally.
+  }
+
+  .score-row {
+    display: flex;
+    align-items: center; // Vertically centers the box and score.
+    justify-content: center; // Horizontally centers the content within the row.
+    width: 100%; // Full width for even distribution.
+    gap: 15px; // Horizontal spacing between house box and score.
+  }
+
+  .house-box {
+    width: 150px; // Fixed width for equal-sized rectangles.
+    height: 60px; // Fixed height for equal-sized rectangles.
+    border-radius: 8px; // Rounded corners.
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9em;
+    font-weight: 900;
+    font-family: 'Harry Potter', serif;
+    text-transform: uppercase; // Ensures capitalization, as backup to Rust-side to_uppercase().
+
+    // House-specific background colors (primary colors).
+    &.gryffindor-bg {
+      background-color: #d32f2f; // Gryffindor red.
+    }
+
+    &.hufflepuff-bg {
+      background-color: #ffca28; // Hufflepuff yellow.
+    }
+
+    &.ravenclaw-bg {
+      background-color: #1976d2; // Ravenclaw blue.
+    }
+
+    &.slytherin-bg {
+      background-color: #388e3c; // Slytherin green.
+    }
+  }
+
+  // House-specific text colors (secondary colors).
+  .gryffindor-text {
+    color: #ffd700; // Gold for Gryffindor.
+  }
+
+  .hufflepuff-text {
+    color: #000000; // Black for Hufflepuff.
+  }
+
+  .ravenclaw-text {
+    color: #432818; // Bronze for Ravenclaw.
+  }
+
+  .slytherin-text {
+    color: #c0c0c0; // Silver for Slytherin.
+  }
+
+  .score-display {
+    width: 80px;
+    font-family: 'Courier New', monospace; // Monospaced font suitable for scores (e.g., digital display feel).
+    font-size: 2em;
+    font-weight: 900; // Heavy weight for emphasis on numbers.
+    text-align: right;
+  }
+
+  .score-number {
+    // Inherits font-family and weight from .score-display, but can be overridden if needed.
+  }
+}
+
 .home-section {
   margin-bottom: 30px;
   padding: 20px;
@@ -84,10 +233,8 @@ body {
   }
 }
 
-.games-list {
-  li {
-    border-left-color: #b59f3a; // Yellow for games
-  }
+.centered {
+  text-align: center;
 }
 
 // Centers the admin dashboard content with a max-width of 800px and left-aligns
