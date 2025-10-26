@@ -307,6 +307,46 @@ body {
   gap: 15px;
 }
 
+.register-form {
+  label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .label-text {
+    flex-shrink: 0;
+    width: 100px;
+    text-align: left;
+    font-weight: bold;
+  }
+
+  .form-input,
+  .form-select {
+    flex: 1;
+  }
+}
+
+.award-form {
+  label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .label-text {
+    flex-shrink: 0;
+    width: 100px;
+    text-align: left;
+    font-weight: bold;
+  }
+
+  .form-input,
+  .form-select {
+    flex: 1;
+  }
+}
+
 // Flexbox column layout for each label-input pair, with small gaps for spacing.
 .form-group {
   display: flex;
@@ -716,7 +756,7 @@ h2, h3 {
   }
 }
 
-// Very small screens: eevn smaller cells to fit ~430px viewport with padding.
+// Very small screens: even smaller cells to fit ~430px viewport with padding.
 @media (max-width: 480px) {
   .crossword {
     padding: 0 20px;  // 20px padding each side for breathing room.

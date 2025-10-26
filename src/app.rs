@@ -1111,10 +1111,10 @@ fn AdminDashboard() -> impl IntoView {
 
                             <section class="admin-section">
                                 <h2>"Register New Guest"</h2>
-                                <form class="admin-form" on:submit=register_submit>
+                                <form class="admin-form register-form" on:submit=register_submit>
                                     <div class="form-group">
                                         <label>
-                                            "Guest: "
+                                            <span class="label-text">"Guest: "</span>
                                             <select
                                                 class="form-select"
                                                 prop:value=move || selected_guest_id.get().to_string()
@@ -1157,7 +1157,7 @@ fn AdminDashboard() -> impl IntoView {
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            "Character: "
+                                            <span class="label-text">"Character: "</span>
                                             <input
                                                 class="form-input"
                                                 type="text"
@@ -1171,7 +1171,7 @@ fn AdminDashboard() -> impl IntoView {
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            "House: "
+                                            <span class="label-text">"House: "</span>
                                             <select
                                                 class="form-select"
                                                 prop:value=move || new_guest_house.get().to_string()
@@ -1239,10 +1239,10 @@ fn AdminDashboard() -> impl IntoView {
 
                             <section class="admin-section">
                                 <h2>"Award Points to House"</h2>
-                                <form class="admin-form" on:submit=award_house_submit>
+                                <form class="admin-form award-form" on:submit=award_house_submit>
                                     <div class="form-group">
                                         <label>
-                                            "House: "
+                                            <span class="label-text">"House: "</span>
                                             <select
                                                 class="form-select"
                                                 prop:value=move || award_house_id.get().to_string()
@@ -1280,7 +1280,7 @@ fn AdminDashboard() -> impl IntoView {
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            "Amount: "
+                                            <span class="label-text">"Amount: "</span>
                                             <input
                                                 class="form-input"
                                                 type="number"
