@@ -18,7 +18,7 @@ use wasm_bindgen::JsCast;
 #[cfg(feature = "ssr")]
 use crate::{
     award_points_to_house, create_admin_session, get_all_active_guests, get_all_houses,
-    get_all_point_awards, get_all_unregistered_guests, get_guest_by_token, get_guest_token,
+    get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
     get_or_init_crossword_state, register_guest, reregister_guest, unregister_guest,
     update_crossword_state, validate_admin_token,
 };
@@ -298,24 +298,6 @@ pub async fn award_points_to_house_handler(
         award_points_to_house(&mut conn, house_id, amount, &reason)
             .map(|_| ())
             .map_err(|e| AppError::DbError(e.to_string()))
-    })
-    .await
-    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
-}
-
-#[server(GetGuestToken)]
-pub async fn get_guest_token_handler(guest_id: i32) -> Result<String, AppError> {
-    check_admin().await?;
-
-    let pool: DbPool = expect_context();
-
-    tokio::task::spawn_blocking(move || {
-        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
-        get_guest_token(&mut conn, guest_id)
-            .map_err(|e| AppError::DbError(e.to_string()))
-            .and_then(|maybe_token| {
-                maybe_token.ok_or(AppError::AuthError("No token found".to_string()))
-            })
     })
     .await
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
@@ -951,53 +933,6 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
-    // Signals related to displaying a toast.
-    let toast_visible = RwSignal::new(false);
-    let toast_message = RwSignal::new(String::new());
-    // If a user clicks on multiple elements that result in the toast being displayed in quick
-    // succession, we only want the last of the timers spawned from those events to hide the toast.
-    // This id tracks the unique id of the newest timer that triggered the toast.
-    let toast_id = RwSignal::new(0i32);
-
-    let show_toast = move |message: String| {
-        let current_id = {
-            let new_id = toast_id.get_untracked() + 1;
-            toast_id.set(new_id);
-            new_id
-        };
-        toast_visible.set(true);
-        toast_message.set(message);
-        spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(2000).await;
-            if toast_id.get_untracked() == current_id {
-                toast_visible.set(false);
-            }
-        });
-    };
-
-    let copy_token = move |token: String| {
-        #[cfg(feature = "hydrate")]
-        {
-            spawn_local(async move {
-                let window = web_sys::window().expect("window");
-                let clipboard = window.navigator().clipboard();
-                let promise = clipboard.write_text(&token);
-                let future = wasm_bindgen_futures::JsFuture::from(promise);
-                match future.await {
-                    Ok(_) => {
-                        log!("Token copied to clipboard successfully");
-                        show_toast("copied to clipboard".to_string());
-                    }
-                    Err(e) => log!("Failed to copy token to clipboard: {:?}", e),
-                }
-            });
-        }
-        #[cfg(not(feature = "hydrate"))]
-        {
-            log!("Clipboard API not available on server");
-        }
-    };
-
     // Signals related to awarding points to a house.
     let award_house_id = RwSignal::new(0i32);
     let award_house_amount = RwSignal::new(0i32);
@@ -1053,36 +988,6 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
-    let copy_guest_token = move |guest_id: i32| {
-        spawn_local(async move {
-            match get_guest_token_handler(guest_id).await {
-                Ok(token) => {
-                    #[cfg(feature = "hydrate")]
-                    {
-                        let window = web_sys::window().expect("window");
-                        let clipboard = window.navigator().clipboard();
-                        let promise = clipboard.write_text(&token);
-                        let future = wasm_bindgen_futures::JsFuture::from(promise);
-                        match future.await {
-                            Ok(_) => {
-                                log!("Guest token copied to clipboard successfully");
-                                show_toast("Copied to clipboard".to_string());
-                            }
-                            Err(e) => log!("Failed to copy guest token to clipboard: {:?}", e),
-                        }
-                    }
-                    #[cfg(not(feature = "hydrate"))]
-                    {
-                        log!("Clipboard API not available on server");
-                    }
-                }
-                Err(e) => {
-                    log!("Error fetching guest token: {}", e);
-                }
-            }
-        });
-    };
-
     let logout = move |_| {
         spawn_local(async move {
             let _ = admin_logout().await;
@@ -1104,9 +1009,6 @@ fn AdminDashboard() -> impl IntoView {
                                     "← Home"
                                 </a>
                                 <h1>"Admin Dashboard"</h1>
-                                <button class="btn-logout" on:click=logout>
-                                    "Logout"
-                                </button>
                             </header>
 
                             <section class="admin-section">
@@ -1222,13 +1124,7 @@ fn AdminDashboard() -> impl IntoView {
                                 {move || {
                                     if !registered_token.get().is_empty() {
                                         view! {
-                                            <p
-                                                class="token-display"
-                                                on:click=move |_| copy_token(registered_token.get())
-                                                title="Click to copy to clipboard"
-                                            >
-                                                {registered_token.get()}
-                                            </p>
+                                            <p class="token-display">{registered_token.get()}</p>
                                         }
                                             .into_any()
                                     } else {
@@ -1357,12 +1253,6 @@ fn AdminDashboard() -> impl IntoView {
                                                                                         })}
                                                                                 </td>
                                                                                 <td>
-                                                                                    <button
-                                                                                        class="btn-secondary"
-                                                                                        on:click=move |_| copy_guest_token(id)
-                                                                                    >
-                                                                                        "Copy token"
-                                                                                    </button>
                                                                                     <button class="btn-danger" on:click=move |_| unregister(id)>
                                                                                         "Unregister"
                                                                                     </button>
@@ -1429,12 +1319,11 @@ fn AdminDashboard() -> impl IntoView {
                                     </table>
                                 </div>
                             </section>
-
-                            <div class=move || {
-                                if toast_visible.get() { "toast show" } else { "toast" }
-                            }>
-                                <p style="margin: 0; text-align: center">{toast_message.get()}</p>
-                            </div>
+                        </div>
+                        <div class="logout-footer">
+                            <button class="btn-logout" on:click=logout>
+                                "Logout"
+                            </button>
                         </div>
                     }
                         .into_any()

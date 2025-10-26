@@ -269,6 +269,17 @@ body {
   }
 }
 
+.logout-footer {
+  text-align: center;
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 1px solid #3a3a3c;
+
+  .btn-logout {
+    // Inherit existing btn-logout styles, but ensure it's prominent.
+  }
+}
+
 // Creates a flexbox header row that spaces the title and logout button evenly;
 // adds a bottom border for separation.
 .admin-header {
