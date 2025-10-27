@@ -231,6 +231,23 @@ body {
       }
     }
   }
+
+  &.centered {
+    text-align: center;
+
+    h3 {
+      text-align: center;
+    }
+  }
+
+  .games-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+    max-width: 200px;
+    margin: 0 auto;
+  }
 }
 
 .centered {
@@ -494,6 +511,32 @@ body {
 
   &:hover {
     background-color: #d4c47a;
+  }
+}
+
+.btn-game {
+  display: flex; // Changed to flex for better centering control.
+  align-items: center; // Vertically centers text within the button.
+  justify-content: center; // Horizontally centers text (replaces text-align).
+  padding: 12px 20px;
+  background-color: #FF7F50; // Coral/orange base color.
+  color: #000000; // Black text as specified.
+  text-decoration: none; // Removes underline from <a> elements.
+  border-radius: 4px;
+  font-size: 18px; // Slightly larger text (from 16px).
+  font-family: 'Harry Potter', serif; // Matches house names' font in House Scores.
+  font-weight: 900; // Much bolder and thicker text, matching house names.
+  text-transform: uppercase; // Uppercases text like house names (e.g., "HOGWARTLE").
+  min-height: 44px; // Touch-friendly height, matching other buttons.
+  transition: background-color 0.2s; // Smooth hover transition, like other buttons.
+  line-height: 1.2; // Ensures consistent line height for vertical alignment in flex.
+
+  &:hover {
+    background-color: #FF8C69; // Slightly darker coral on hover for feedback.
+  }
+
+  &:active {
+    background-color: #FF6B35; // Even darker on active/press.
   }
 }
 
@@ -877,5 +920,15 @@ h2, h3 {
     height: 32px;
     font-size: 14px;
     margin: 0.5px;
+  }
+
+  // Ensures game buttons stack and fill width on mobile for touch-friendliness.
+  .games-buttons {
+    max-width: none; // Full width on small screens.
+  }
+
+  .btn-game {
+    width: 100%; // Full-width buttons on mobile.
+    margin-bottom: 10px; // Spacing between stacked buttons.
   }
 }

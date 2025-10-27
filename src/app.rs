@@ -532,16 +532,16 @@ fn Home() -> impl IntoView {
             .flatten()
             .map(|_| {
                 view! {
-                    <section class="home-section">
+                    <section class="home-section centered">
                         <h3>"Games and Activities"</h3>
-                        <ul>
-                            <li>
-                                <a href="/games/wordle">"Hogwartle"</a>
-                            </li>
-                            <li>
-                                <a href="/games/crossword">"Horcrux Hunt"</a>
-                            </li>
-                        </ul>
+                        <div class="games-buttons">
+                            <a class="btn-game" href="/games/wordle">
+                                "Hogwartle"
+                            </a>
+                            <a class="btn-game" href="/games/crossword">
+                                "Horcrux Hunt"
+                            </a>
+                        </div>
                     </section>
                 }
                 .into_any()
@@ -1875,9 +1875,14 @@ fn Crossword() -> impl IntoView {
                     let lines: Vec<_> = clue.split('\n').collect();
                     view! {
                         <div class="clues reveal">
-                            {lines.iter().map(|line| {
-                                view! { <p style="font-style: italic; margin: 0.25em 0;">{*line}</p> }
-                            }).collect_view()}
+                            {lines
+                                .iter()
+                                .map(|line| {
+                                    view! {
+                                        <p style="font-style: italic; margin: 0.25em 0;">{*line}</p>
+                                    }
+                                })
+                                .collect_view()}
                         </div>
                     }.into_any()
                 };
