@@ -1865,9 +1865,28 @@ fn Crossword() -> impl IntoView {
     let horcrux_clues_view = move || {
         let clues = horcrux_clues.get();
         let completions = completions.get();
-        clues.iter().zip(completions.iter()).map(|(clue, &completed)| {
-            view! { <div class=if completed { "clue reveal" } else { "clue" }>{clue.clone()}</div> }
-        }).collect_view()
+        clues
+            .iter()
+            .zip(completions.iter())
+            .map(|(clue, &completed)| {
+                let clue_view = if !completed {
+                    view! { <div class="clue">{clue.clone()}</div> }.into_any()
+                } else {
+                    let lines: Vec<_> = clue.split('\n').collect();
+                    view! {
+                        <div class="clues reveal">
+                            {lines.iter().map(|line| {
+                                view! { <p style="font-style: italic; margin: 0.25em 0;">{*line}</p> }
+                            }).collect_view()}
+                        </div>
+                    }.into_any()
+                };
+                view! {
+                    {clue_view}
+                    <div style="height: 1px; background-color: rgba(255, 255, 255, 0.1); margin: 0.5em 0;"></div>
+                }
+            })
+            .collect_view()
     };
 
     view! {

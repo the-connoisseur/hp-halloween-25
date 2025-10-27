@@ -574,7 +574,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 5,
         dir: Direction::Across,
         answer: "WINKY",
-        reveal_text: "TBD 1",
+        reveal_text: "Behind a door where secrets sleep,\nI slither low, my watch I keep.\nNo voice, no spell, just breath and skin,\nThe darkness stirs, I wait within.",
     },
     WordDef {
         start_row: 6,
@@ -582,7 +582,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 12,
         dir: Direction::Across,
         answer: "EXPELLIARMUS",
-        reveal_text: "TBD 2",
+        reveal_text: "With lemon drops and half-moon gaze,\nI unravel riddles through misty haze.\nFrom elder's core, my power flows,\nShepherding souls where the wild wind blows.",
     },
     WordDef {
         start_row: 2,
@@ -590,7 +590,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 10,
         dir: Direction::Down,
         answer: "DISSENDIUM",
-        reveal_text: "TBD 3",
+        reveal_text: "At the threshold where paths align,\nCloak, wand, and stone combine.\nThrough death I passed, through love restored,\nNow hang I here at fate's own door.",
     },
     WordDef {
         start_row: 0,
@@ -598,7 +598,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 8,
         dir: Direction::Down,
         answer: "SNUFFLES",
-        reveal_text: "TBD 4",
+        reveal_text: "Among the brave, I should not be,\nYet here I wait, in secrecy.\nMy pages whisper lies and lore,\nTo open hearts - and something more.",
     },
     WordDef {
         start_row: 5,
@@ -606,7 +606,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 10,
         dir: Direction::Down,
         answer: "SIRCADOGAN",
-        reveal_text: "TBD 5",
+        reveal_text: "Once a token of toil and truth,\nNow a prison to deathless youth.\nGold surrounds me, bright and deep,\nYet secrets foul within me sleep.",
     },
     WordDef {
         start_row: 3,
@@ -614,7 +614,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 9,
         dir: Direction::Down,
         answer: "BOARHOUND",
-        reveal_text: "TBD 6",
+        reveal_text: "Where portraits purr in rose-tinted frame,\nI nest in her china, igniting no flame.\nEmblem of lineage, cold and entwined,\nI whisper old venom, twisting the mind.",
     },
     WordDef {
         start_row: 1,
@@ -622,7 +622,7 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 7,
         dir: Direction::Down,
         answer: "IGNOTUS",
-        reveal_text: "TBD 7",
+        reveal_text: "\"Wit beyond measure\" once was prized,\nNow in your clutter, undisguised.\nAmong the things you cast aside,\nThe clever crown still tries to hide.",
     },
 ];
 
