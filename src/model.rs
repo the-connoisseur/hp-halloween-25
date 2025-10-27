@@ -198,9 +198,7 @@ impl From<CrosswordState> for String {
 #[cfg(feature = "ssr")]
 impl From<String> for CrosswordState {
     fn from(json: String) -> Self {
-        print!("Deserializing CrosswordState");
         let sparse: SparseState = serde_json::from_str(&json).unwrap_or_default();
-        print!("Deserialized CrosswordState");
         let mut grid = vec![vec![None; 12]; 15];
         for (r, c, ch) in &sparse.filled {
             if *r < 15 && *c < 12 {
@@ -217,4 +215,24 @@ impl From<String> for CrosswordState {
             completions: sparse.completions,
         }
     }
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::house_crossword_completions)]
+#[diesel(check_for_backend(Sqlite))]
+pub struct HouseCrosswordCompletion {
+    pub id: i32,
+    pub house_id: i32,
+    pub word_index: i32,
+    pub completed_at: NaiveDateTime,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = crate::schema::house_crossword_completions)]
+pub struct NewHouseCrosswordCompletion {
+    pub house_id: i32,
+    pub word_index: i32,
+    // completed_at uses default (CURRENT_TIMESTAMP)
 }

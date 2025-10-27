@@ -25,11 +25,15 @@ use uuid::Uuid;
 
 #[cfg(feature = "ssr")]
 use crate::model::{
-    CrosswordState, DbCrosswordState, Guest, House, NewAdminSession, NewDbCrosswordState,
-    NewPointAward, NewSession, PointAward, PointAwardLog,
+    CrosswordState, DbCrosswordState, Guest, House, HouseCrosswordCompletion, NewAdminSession,
+    NewDbCrosswordState, NewHouseCrosswordCompletion, NewPointAward, NewSession, PointAward,
+    PointAwardLog,
 };
 #[cfg(feature = "ssr")]
-use crate::schema::{admin_sessions, crossword_states, guests, houses, point_awards, sessions};
+use crate::schema::{
+    admin_sessions, crossword_states, guests, house_crossword_completions, houses, point_awards,
+    sessions,
+};
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -531,6 +535,9 @@ pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result:
         // Delete all guest crossword states.
         diesel::delete(crossword_states::table).execute(conn)?;
 
+        // Delete all house crossword completion entries.
+        diesel::delete(house_crossword_completions::table).execute(conn)?;
+
         // Reset all guests.
         diesel::update(guests::table)
             .set((
@@ -656,21 +663,113 @@ pub fn get_or_init_crossword_state(
 }
 
 /// Updates the crossword state for a guest. Replaces the entire row in the database.
+/// Additionally, checks for new word completions by this guest, and awards house points if it's
+/// the house's first completion of that word. As a result of a first time completion, if all 7
+/// words are now complete by the house, awards an additional bonus.
 #[cfg(feature = "ssr")]
 pub fn update_crossword_state(
     conn: &mut SqliteConnection,
     guest_id: i32,
     new_state: &CrosswordState,
 ) -> Result<(), diesel::result::Error> {
-    diesel::delete(crossword_states::table.filter(crossword_states::guest_id.eq(guest_id)))
-        .execute(conn)?;
-    let db_state = NewDbCrosswordState {
-        guest_id,
-        state: new_state.clone().into(),
-        updated_at: chrono::Utc::now().naive_utc(),
+    conn.transaction(|conn| {
+        // Getch the guest to get house_id.
+        let guest: Guest = guests::table
+            .filter(guests::id.eq(guest_id))
+            .filter(guests::is_active.eq(1i32))
+            .select(Guest::as_select())
+            .first(conn)?;
+        let house_id = guest.house_id.ok_or(diesel::result::Error::NotFound)?;
+
+        // Fetch the old state to compare completions.
+        let old_db_state: Option<DbCrosswordState> = crossword_states::table
+            .filter(crossword_states::guest_id.eq(guest_id))
+            .first(conn)
+            .optional()?;
+        let old_completions = match old_db_state {
+            Some(old) => CrosswordState::from(old.state.clone()).completions,
+            None => [false; 7],
+        };
+
+        // Query the house's initial completion count before any inserts.
+        let initial_count: i64 = house_crossword_completions::table
+            .filter(house_crossword_completions::house_id.eq(house_id))
+            .count()
+            .get_result(conn)?;
+
+        // Check for new completions and award points if first for the house. Track any new
+        // insertions.
+        let mut new_inserts_count = 0;
+        for i in 0..7 {
+            if !old_completions[i] && new_state.completions[i] {
+                // This guest just completed word i.
+                if !house_has_completed_word(conn, house_id, i as i32)? {
+                    // First time for for the house; award 5 points and mark completed.
+                    award_points_to_house(
+                        conn,
+                        house_id,
+                        5,
+                        &format!("Crossword word {} completed by house", i),
+                    )?;
+                    insert_house_word_completion(conn, house_id, i as i32)?;
+                    new_inserts_count += 1;
+                }
+            }
+        }
+
+        // Check if this update caused the house to reach all 7 completions.
+        let effective_final_count = initial_count + new_inserts_count as i64;
+        if effective_final_count == 7 {
+            award_points_to_house(conn, house_id, 15, "Crossword completion bonus")?;
+        }
+
+        // Replace the state in DB.
+        diesel::delete(crossword_states::table.filter(crossword_states::guest_id.eq(guest_id)))
+            .execute(conn)?;
+        let db_state = NewDbCrosswordState {
+            guest_id,
+            state: new_state.clone().into(),
+            updated_at: Utc::now().naive_utc(),
+        };
+        diesel::insert_into(crossword_states::table)
+            .values(&db_state)
+            .execute(conn)?;
+
+        Ok(())
+    })
+}
+
+/// Returs true if a house has already completed a specific crossword word.
+#[cfg(feature = "ssr")]
+pub fn house_has_completed_word(
+    conn: &mut SqliteConnection,
+    house_id: i32,
+    word_index: i32,
+) -> Result<bool, diesel::result::Error> {
+    let count: i64 = house_crossword_completions::table
+        .filter(
+            house_crossword_completions::house_id
+                .eq(house_id)
+                .and(house_crossword_completions::word_index.eq(word_index)),
+        )
+        .count()
+        .get_result(conn)?;
+    Ok(count > 0)
+}
+
+/// Marks a house as having completed a specific crossword word.
+#[cfg(feature = "ssr")]
+pub fn insert_house_word_completion(
+    conn: &mut SqliteConnection,
+    house_id: i32,
+    word_index: i32,
+) -> Result<(), diesel::result::Error> {
+    let new_completion = NewHouseCrosswordCompletion {
+        house_id,
+        word_index,
     };
-    diesel::insert_into(crossword_states::table)
-        .values(&db_state)
+    diesel::insert_into(house_crossword_completions::table)
+        .values(&new_completion)
         .execute(conn)?;
     Ok(())
 }
@@ -1404,6 +1503,94 @@ mod tests {
             assert_eq!(awards[1].reason, "Third".to_string());
             assert_eq!(awards[2].reason, "Second".to_string());
             assert_eq!(awards[3].reason, "First".to_string());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_house_has_completed_word_nominal() {
+        run_test_in_transaction(|conn| {
+            // No record exists initially -> false.
+            assert!(!house_has_completed_word(conn, 1, 0)?);
+
+            // Insert a completion.
+            insert_house_word_completion(conn, 1, 0)?;
+
+            // Now it exists -> true.
+            assert!(house_has_completed_word(conn, 1, 0)?);
+
+            // Different word -> false.
+            assert!(!house_has_completed_word(conn, 1, 1)?);
+
+            // Different house -> false.
+            assert!(!house_has_completed_word(conn, 2, 0)?);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_house_has_completed_word_edge_cases() {
+        run_test_in_transaction(|conn| {
+            // Non-existent house id -> false (no record).
+            assert!(!house_has_completed_word(conn, 999, 0)?);
+
+            // Invalid word_index (out of 0-6 range) -> false (no record, and DB CHECK would
+            // prevent insert anyway).
+            assert!(!house_has_completed_word(conn, 1, -1)?);
+            assert!(!house_has_completed_word(conn, 1, 7)?);
+
+            // Valid house, valid index, but no record -> false.
+            assert!(!house_has_completed_word(conn, 1, 3)?);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_insert_house_word_completion_nominal() {
+        run_test_in_transaction(|conn| {
+            // Valid house_id, valid word_index -> succeeds.
+            assert!(insert_house_word_completion(conn, 1, 2).is_ok());
+            assert!(house_has_completed_word(conn, 1, 2)?);
+            let completion: HouseCrosswordCompletion = house_crossword_completions::table
+                .filter(
+                    house_crossword_completions::house_id
+                        .eq(1)
+                        .and(house_crossword_completions::word_index.eq(2)),
+                )
+                .first(conn)?;
+            assert!(completion.completed_at.and_utc().timestamp() > 0);
+            assert_eq!(completion.house_id, 1);
+            assert_eq!(completion.word_index, 2);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_insert_house_word_completion_edge_cases() {
+        run_test_in_transaction(|conn| {
+            // Non-existent house_id -> fails with DatabaseError (FK constraint violation).
+            let err = insert_house_word_completion(conn, 999, 0)
+                .expect_err("Should fail for non-existent house");
+            assert!(matches!(err, diesel::result::Error::DatabaseError { .. }));
+
+            // Invalid word index (out of 0-6) -> fails with DatabaseError (CHECK constraint).
+            let err = insert_house_word_completion(conn, 1, -1)
+                .expect_err("Should fail for negative word index");
+            assert!(matches!(err, diesel::result::Error::DatabaseError { .. }));
+
+            let err = insert_house_word_completion(conn, 1, 7)
+                .expect_err("Should fail for too high word index");
+            assert!(matches!(err, diesel::result::Error::DatabaseError { .. }));
+
+            // Duplicate insertion -> fails with DatabaseError (UNIQUE constraint).
+            insert_house_word_completion(conn, 1, 0)?;
+            let err = insert_house_word_completion(conn, 1, 0)
+                .expect_err("Should fail for duplicate insertion");
+            assert!(matches!(err, diesel::result::Error::DatabaseError { .. }));
 
             Ok(())
         });

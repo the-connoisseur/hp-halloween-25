@@ -31,6 +31,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    house_crossword_completions (id) {
+        id -> Integer,
+        house_id -> Integer,
+        word_index -> Integer,
+        completed_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     houses (id) {
         id -> Integer,
         name -> Text,
@@ -61,6 +70,7 @@ diesel::table! {
 
 diesel::joinable!(crossword_states -> guests (guest_id));
 diesel::joinable!(guests -> houses (house_id));
+diesel::joinable!(house_crossword_completions -> houses (house_id));
 diesel::joinable!(point_awards -> guests (guest_id));
 diesel::joinable!(point_awards -> houses (house_id));
 diesel::joinable!(sessions -> guests (guest_id));
@@ -69,6 +79,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     admin_sessions,
     crossword_states,
     guests,
+    house_crossword_completions,
     houses,
     point_awards,
     sessions,
