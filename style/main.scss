@@ -932,3 +932,37 @@ h2, h3 {
     margin-bottom: 10px; // Spacing between stacked buttons.
   }
 }
+
+.horcrux-table {
+  th {
+    text-align: center;
+    width: 20%; // Equal width for # and houses.
+  }
+
+  td {
+    text-align: center;
+    padding: 8px; // Reduced padding for compact grid feel.
+
+    .green-dot {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      background-color: #538d4e; // Matches "correct" green from Wordle/Crossword.
+      border-radius: 50%; // Filled circle.
+      border: 1px solid #ffffff; // Subtle white border for visibility on dark bg.
+    }
+  }
+
+  // Compact on mobile.
+  @media (max-width: 600px) {
+    th, td {
+      padding: 4px;
+      font-size: 12px;
+
+      .green-dot {
+        width: 10px;
+        height: 10px;
+      }
+    }
+  }
+}

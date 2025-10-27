@@ -20,8 +20,8 @@ use wasm_bindgen::JsCast;
 use crate::{
     award_points_to_house, create_admin_session, get_all_active_guests, get_all_houses,
     get_all_point_awards, get_all_unregistered_guests, get_guest_by_token, get_guest_token,
-    get_or_init_crossword_state, register_guest, reregister_guest, unregister_guest,
-    update_crossword_state, validate_admin_token,
+    get_house_crossword_progress, get_or_init_crossword_state, register_guest, reregister_guest,
+    unregister_guest, update_crossword_state, validate_admin_token,
 };
 use crate::{
     model::{CrosswordState, Guest, House, PointAwardLog, SparseState},
@@ -367,6 +367,20 @@ pub async fn get_point_awards() -> Result<Vec<PointAwardLog>, AppError> {
     tokio::task::spawn_blocking(move || {
         let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
         get_all_point_awards(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetHouseCrosswordProgress)]
+pub async fn get_house_crossword_progress_handler() -> Result<Vec<Vec<bool>>, AppError> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_house_crossword_progress(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
     })
     .await
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
@@ -947,6 +961,8 @@ fn AdminDashboard() -> impl IntoView {
     let active_guests_fetcher = Resource::new(|| (), |_| get_active_guests());
     let unregistered_guests_fetcher = Resource::new(|| (), |_| get_unregistered_guests());
     let point_awards_fetcher = Resource::new(|| (), |_| get_point_awards());
+    let house_crossword_progress_fetcher =
+        Resource::new(|| (), |_| get_house_crossword_progress_handler());
 
     // Redirects to the home page if a user who isn't logged in as an admin tries to visit the
     // admin dashboard.
@@ -1402,6 +1418,71 @@ fn AdminDashboard() -> impl IntoView {
                                                                 view! {
                                                                     <tr>
                                                                         <td colspan="3">"Loading..."</td>
+                                                                    </tr>
+                                                                }
+                                                                    .into_view()
+                                                                    .into_any()
+                                                            }
+                                                        })
+                                                }}
+                                            </Suspense>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+
+                            <section class="admin-section">
+                                <h2>"Horcrux Hunt"</h2>
+                                <div class="table-responisive">
+                                    <table class="admin-table horcrux-table">
+                                        <thead>
+                                            <tr>
+                                                <th>"#"</th>
+                                                <th>"G"</th>
+                                                <th>"H"</th>
+                                                <th>"R"</th>
+                                                <th>"S"</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <Suspense fallback=|| {
+                                                view! {
+                                                    <tr>
+                                                        <td colspan="5">"Loading..."</td>
+                                                    </tr>
+                                                }
+                                            }>
+                                                {move || {
+                                                    house_crossword_progress_fetcher
+                                                        .with(|maybe_result| match maybe_result {
+                                                            Some(Ok(matrix)) => {
+                                                                (0..7u8)
+                                                                    .map(|word_idx| {
+                                                                        view! {
+                                                                            <tr>
+                                                                                <td>{(word_idx + 1).to_string()}</td>
+                                                                                {matrix
+                                                                                    .iter()
+                                                                                    .map(|house_row| {
+                                                                                        let completed = house_row[word_idx as usize];
+                                                                                        view! {
+                                                                                            <td>
+                                                                                                {completed
+                                                                                                    .then(|| view! { <span class="green-dot"></span> })}
+                                                                                            </td>
+                                                                                        }
+                                                                                    })
+                                                                                    .collect_view()}
+                                                                            </tr>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()
+                                                                    .into_any()
+                                                            }
+                                                            _ => {
+                                                                view! {
+                                                                    <tr>
+                                                                        <td colspan="5">"Error laoding progress"</td>
                                                                     </tr>
                                                                 }
                                                                     .into_view()

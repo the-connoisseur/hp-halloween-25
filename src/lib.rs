@@ -473,6 +473,37 @@ pub fn get_all_point_awards(
         .load(conn)
 }
 
+/// Fetches the crossword completion progress for all houses.
+/// Returns a 4x7 boolean matrix: rows = houses (0=Gryffindor/id1, 1=Hufflepuff/id2, 2=Ravenclaw/id3, 3=Slytherin/id4),
+/// columns = words (0-6). true if house has completed that word.
+#[cfg(feature = "ssr")]
+pub fn get_house_crossword_progress(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<Vec<bool>>, diesel::result::Error> {
+    let completions: Vec<HouseCrosswordCompletion> = house_crossword_completions::table
+        .inner_join(houses::table.on(house_crossword_completions::house_id.eq(houses::id)))
+        .select(HouseCrosswordCompletion::as_select())
+        .load(conn)?;
+
+    let mut matrix: Vec<Vec<bool>> = vec![vec![false; 7]; 4];
+
+    for completion in completions {
+        let house_idx = match completion.house_id {
+            1 => 0,
+            2 => 1,
+            3 => 2,
+            4 => 3,
+            _ => continue,
+        };
+        let word_idx = completion.word_index as usize;
+        if word_idx < 7 {
+            matrix[house_idx][word_idx] = true;
+        }
+    }
+
+    Ok(matrix)
+}
+
 /// Fetches all houses.
 #[cfg(feature = "ssr")]
 pub fn get_all_houses(conn: &mut SqliteConnection) -> Result<Vec<House>, diesel::result::Error> {
@@ -1591,6 +1622,88 @@ mod tests {
             let err = insert_house_word_completion(conn, 1, 0)
                 .expect_err("Should fail for duplicate insertion");
             assert!(matches!(err, diesel::result::Error::DatabaseError { .. }));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_house_crossword_progress_nominal() {
+        run_test_in_transaction(|conn| {
+            let matrix = get_house_crossword_progress(conn)?;
+            assert_eq!(matrix.len(), 4);
+            for row in &matrix {
+                assert_eq!(row.len(), 7);
+                assert!(row.iter().all(|&c| !c));
+            }
+
+            insert_house_word_completion(conn, 1, 0)?;
+            insert_house_word_completion(conn, 2, 1)?;
+            insert_house_word_completion(conn, 3, 2)?;
+            insert_house_word_completion(conn, 4, 3)?;
+            insert_house_word_completion(conn, 1, 4)?;
+
+            let matrix = get_house_crossword_progress(conn)?;
+            assert_eq!(
+                matrix[0],
+                vec![true, false, false, false, true, false, false]
+            );
+            assert_eq!(
+                matrix[1],
+                vec![false, true, false, false, false, false, false]
+            );
+            assert_eq!(
+                matrix[2],
+                vec![false, false, true, false, false, false, false]
+            );
+            assert_eq!(
+                matrix[3],
+                vec![false, false, false, true, false, false, false]
+            );
+
+            for i in 0..7i32 {
+                let _ = insert_house_word_completion(conn, 1, i);
+            }
+            let matrix = get_house_crossword_progress(conn)?;
+            assert!(matrix[0].iter().all(|&c| c));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_get_house_crossword_progress_edge_cases() {
+        run_test_in_transaction(|conn| {
+            // Invalid house_id in completion -> ignored (matrix all false).
+            // Manually insert invalid (bypasses FK for test; in prod, FK prevents).
+            diesel::insert_into(house_crossword_completions::table)
+                .values(&NewHouseCrosswordCompletion {
+                    house_id: 5, // invalid
+                    word_index: 0,
+                })
+                .execute(conn)?;
+            let matrix = get_house_crossword_progress(conn)?;
+            assert!(matrix.iter().flatten().all(|&c| !c));
+
+            // Invalid word_index (>=7) -> ignored.
+            diesel::insert_into(house_crossword_completions::table)
+                .values(&NewHouseCrosswordCompletion {
+                    house_id: 1,
+                    word_index: 7, // invalid
+                })
+                .execute(conn)?;
+            let matrix = get_house_crossword_progress(conn)?;
+            assert!(matrix.iter().flatten().all(|&c| !c));
+
+            // Negative word_index -> ignored.
+            diesel::insert_into(house_crossword_completions::table)
+                .values(&NewHouseCrosswordCompletion {
+                    house_id: 1,
+                    word_index: -1, // invalid
+                })
+                .execute(conn)?;
+            let matrix = get_house_crossword_progress(conn)?;
+            assert!(matrix.iter().flatten().all(|&c| !c));
 
             Ok(())
         });
