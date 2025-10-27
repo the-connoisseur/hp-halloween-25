@@ -19,7 +19,7 @@ use wasm_bindgen::JsCast;
 #[cfg(feature = "ssr")]
 use crate::{
     award_points_to_house, create_admin_session, get_all_active_guests, get_all_houses,
-    get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
+    get_all_point_awards, get_all_unregistered_guests, get_guest_by_token, get_guest_token,
     get_or_init_crossword_state, register_guest, reregister_guest, unregister_guest,
     update_crossword_state, validate_admin_token,
 };
@@ -53,6 +53,42 @@ impl leptos::server_fn::error::FromServerFnError for AppError {
     fn from_server_fn_error(value: ServerFnErrorErr) -> Self {
         AppError::ServerFnError(value)
     }
+}
+
+#[server(GetQrForGuest)]
+pub async fn get_qr_for_guest(guest_id: i32) -> Result<String, AppError> {
+    check_admin().await?;
+
+    let pool: DbPool = expect_context();
+
+    let token = tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_guest_token(&mut conn, guest_id)
+            .map_err(|e| AppError::DbError(e.to_string()))
+            .and_then(|maybe_token| {
+                maybe_token.ok_or(AppError::AuthError("No token found for guest".to_string()))
+            })
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))??;
+
+    let base_url = "http://192.168.1.118:3000";
+    let login_url = format!("{}/login?guest_id={}&token={}", base_url, guest_id, token);
+
+    let qr_code = qrcode::QrCode::new(login_url.as_bytes()).map_err(|e| {
+        AppError::ServerFnError(ServerFnErrorErr::ServerError(format!(
+            "QR generation failed: {}",
+            e
+        )))
+    })?;
+    let qr_svg = qr_code
+        .render::<svg::Color<'_>>()
+        .min_dimensions(200, 200)
+        .dark_color(svg::Color("#000000"))
+        .light_color(svg::Color("#FFFFFF"))
+        .build();
+
+    Ok(qr_svg)
 }
 
 #[server(GetHouses)]
@@ -1063,6 +1099,25 @@ fn AdminDashboard() -> impl IntoView {
         });
     };
 
+    let show_qr_modal = RwSignal::new(false);
+    let current_qr_svg = RwSignal::new(String::new());
+    let current_guest_id = RwSignal::new(0i32);
+    let current_guest_name = RwSignal::new(String::new());
+
+    let show_qr_handler = move |guest_id: i32, guest_name: String| {
+        current_guest_id.set(guest_id);
+        current_guest_name.set(guest_name.clone());
+        spawn_local(async move {
+            match get_qr_for_guest(guest_id).await {
+                Ok(qr_svg) => {
+                    current_qr_svg.set(qr_svg);
+                    show_qr_modal.set(true);
+                }
+                Err(e) => log!("Failed to generate QR: {}", e),
+            }
+        });
+    };
+
     view! {
         <Suspense fallback=|| {
             "Loading..."
@@ -1308,10 +1363,11 @@ fn AdminDashboard() -> impl IntoView {
                                                                 guests
                                                                     .iter()
                                                                     .map(|guest| {
-                                                                        let id = guest.id;
+                                                                        let g = guest.clone();
+                                                                        let id = g.id;
                                                                         view! {
                                                                             <tr>
-                                                                                <td>{guest.name.clone()}</td>
+                                                                                <td>{g.name.clone()}</td>
                                                                                 <td>
                                                                                     {houses_fetcher
                                                                                         .with(|maybe_result| {
@@ -1319,13 +1375,19 @@ fn AdminDashboard() -> impl IntoView {
                                                                                                 .as_ref()
                                                                                                 .and_then(|result| result.as_ref().ok())
                                                                                                 .and_then(|houses| {
-                                                                                                    houses.iter().find(|house| Some(house.id) == guest.house_id)
+                                                                                                    houses.iter().find(|house| Some(house.id) == g.house_id)
                                                                                                 })
                                                                                                 .map(|house| house.name.clone())
                                                                                                 .unwrap_or_else(|| "Unknown".to_string())
                                                                                         })}
                                                                                 </td>
                                                                                 <td>
+                                                                                    <button
+                                                                                        class="btn-secondary"
+                                                                                        on:click=move |_| { show_qr_handler(id, g.name.clone()) }
+                                                                                    >
+                                                                                        "Show QR"
+                                                                                    </button>
                                                                                     <button class="btn-danger" on:click=move |_| unregister(id)>
                                                                                         "Unregister"
                                                                                     </button>
@@ -1393,6 +1455,31 @@ fn AdminDashboard() -> impl IntoView {
                                 </div>
                             </section>
                         </div>
+                        {show_qr_modal
+                            .get()
+                            .then(|| {
+                                view! {
+                                    <div
+                                        class="qr-modal-overlay"
+                                        on:click=move |_| show_qr_modal.set(false)
+                                    >
+                                        <div
+                                            class="qr-modal"
+                                            on:click=move |ev| ev.stop_propagation()
+                                        >
+                                            <h3>"QR for " {current_guest_name.get()}</h3>
+                                            <p>"Scan to auto-login"</p>
+                                            <div inner_html=current_qr_svg.get() />
+                                            <button
+                                                class="btn-secondary"
+                                                on:click=move |_| show_qr_modal.set(false)
+                                            >
+                                                "Close"
+                                            </button>
+                                        </div>
+                                    </div>
+                                }
+                            })}
                         <div class="logout-footer">
                             <button class="btn-logout" on:click=logout>
                                 "Logout"
