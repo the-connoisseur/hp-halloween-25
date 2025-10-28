@@ -966,3 +966,53 @@ h2, h3 {
     }
   }
 }
+
+// Rules modal: Reuses QR modal styles but with larger size and content-specific tweaks.
+.rules-modal-overlay {
+  @extend .qr-modal-overlay; // Inherit dark backdrop, positioning, etc.
+}
+
+.rules-modal {
+  @extend .qr-modal; // Inherit background, padding, etc.
+  max-width: 80vw; // Larger than QR (80% viewport width).
+  max-height: 80vh; // Larger height for text.
+  overflow-y: auto; // Scroll if rules text is long.
+
+  h3 {
+    color: #b59f3a;
+    margin-bottom: 15px;
+  }
+
+  .rules-content {
+    text-align: left; // Left-align rules for readability.
+    margin-bottom: 20px;
+    line-height: 1.4;
+
+    p {
+      margin: 10px 0;
+      color: #ffffff;
+      font-size: 1em;
+
+      em {
+        color: #b59f3a; // Yellow italic for flavor text.
+      }
+    }
+  }
+
+  button {
+    margin-top: 10px;
+  }
+
+  // Mobile: Full screen for immersion.
+  @media (max-width: 600px) {
+    max-width: 95vw;
+    max-height: 95vh;
+    padding: 15px;
+  }
+}
+
+.btn-rules {
+  @extend .btn-secondary; // Gray secondary button, like "Show QR".
+  margin: 10px auto 20px; // Center below header, with spacing.
+  display: block; // Ensure centering works.
+}

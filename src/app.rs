@@ -1838,6 +1838,7 @@ fn Crossword() -> impl IntoView {
     let grid = RwSignal::new(vec![vec![None::<char>; 12]; 15]);
     let completions = RwSignal::new([false; 7]);
     let horcrux_clues: RwSignal<Vec<String>> = RwSignal::new(vec![]);
+    let show_rules_modal = RwSignal::new(false);
 
     // On mount/load, sync state to signals.
     Effect::new(move |_| {
@@ -1981,9 +1982,51 @@ fn Crossword() -> impl IntoView {
                 "← Home"
             </a>
             <h1>"Horcrux Hunt"</h1>
+            <button class="btn-rules" on:click=move |_| show_rules_modal.set(true)>
+                "Rules"
+            </button>
             <div class="crossword-grid">{grid_view}</div>
             <div class="horcrux-clues">{horcrux_clues_view}</div>
         </div>
+        {move || {
+            show_rules_modal
+                .get()
+                .then(|| {
+                    view! {
+                        <div
+                            class="rules-modal-overlay"
+                            on:click=move |_| show_rules_modal.set(false)
+                        >
+                            <div class="rules-modal" on:click=move |ev| ev.stop_propagation()>
+                                <h3>"Horcrux Hunt Rules"</h3>
+                                <div class="rules-content">
+                                    <p>
+                                        "Lord Voldemort has hidden his Horcruxes all over Hogwarts! We need your help in finding them."
+                                    </p>
+                                    <p>
+                                        "Explore Hogwarts to find clues for the crossword below. As a house, you earn 5 points for each correct word. Complete all 7 words for a bonus!"
+                                    </p>
+                                    <p>
+                                        "Each completed word also guides you to one of the hidden horcruxes."
+                                    </p>
+                                    <p>
+                                        "Hunt down the horcruxes. These are dangerous objects full of dark magic, so when you find one, DO NOT TOUCH IT! Send a photo of it by WhatsOwl to Hagrid so she can safely retrieve it for the Order to destroy."
+                                    </p>
+                                    <p>
+                                        <em>"Good luck, witches and wizards!"</em>
+                                    </p>
+                                </div>
+                                <button
+                                    class="btn-secondary"
+                                    on:click=move |_| show_rules_modal.set(false)
+                                >
+                                    "Close"
+                                </button>
+                            </div>
+                        </div>
+                    }
+                })
+        }}
     }
 }
 
