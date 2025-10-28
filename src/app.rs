@@ -632,54 +632,7 @@ fn Home() -> impl IntoView {
                     houses_fetcher
                         .with(|h_res| match h_res {
                             Some(Ok(houses)) => {
-                                view! {
-                                    <section class="house-scores centered">
-                                        <h2>"House Scores"</h2>
-                                        <div class="scores-grid">
-                                            {houses
-                                                .iter()
-                                                .map(|house| {
-                                                    let bg_class = format!(
-                                                        "house-box {}",
-                                                        match house.id {
-                                                            1 => "gryffindor-bg",
-                                                            2 => "hufflepuff-bg",
-                                                            3 => "ravenclaw-bg",
-                                                            4 => "slytherin-bg",
-                                                            _ => "",
-                                                        },
-                                                    );
-                                                    let text_color_class = match house.id {
-                                                        1 => "gryffindor-text",
-                                                        2 => "hufflepuff-text",
-                                                        3 => "ravenclaw-text",
-                                                        4 => "slytherin-text",
-                                                        _ => "",
-                                                    };
-                                                    let display_name = house.name.to_uppercase();
-                                                    // Computes background class based on house ID.
-                                                    // Maps house ID to secondary text color class.
-                                                    // Gold
-                                                    // Black
-                                                    // Bronze
-                                                    // Silver
-                                                    // Capitalizes house name for display.
-                                                    view! {
-                                                        <div class="score-row">
-                                                            <div class=bg_class>
-                                                                <span class=text_color_class>{display_name}</span>
-                                                            </div>
-                                                            <div class="score-display">
-                                                                <span class="score-number">{house.score}</span>
-                                                            </div>
-                                                        </div>
-                                                    }
-                                                })
-                                                .collect_view()}
-                                        </div>
-                                    </section>
-                                }
-                                    .into_any()
+                                view! { <HouseScores houses=houses.clone() /> }.into_any()
                             }
                             _ => {
                                 view! {
@@ -1347,6 +1300,32 @@ fn AdminDashboard() -> impl IntoView {
                                 }}
                             </section>
 
+                            // House scores section, rendered unconditionally.
+                            <Suspense fallback=|| {
+                                view! {
+                                    <section class="house-scores centered">
+                                        <p>"Loading house scores"</p>
+                                    </section>
+                                }
+                            }>
+                                {move || {
+                                    houses_fetcher
+                                        .with(|h_res| match h_res {
+                                            Some(Ok(houses)) => {
+                                                view! { <HouseScores houses=houses.clone() /> }.into_any()
+                                            }
+                                            _ => {
+                                                view! {
+                                                    <section class="house-scores centered">
+                                                        <p>"Error loading houses"</p>
+                                                    </section>
+                                                }
+                                                    .into_any()
+                                            }
+                                        })
+                                }}
+                            </Suspense>
+
                             <section class="admin-section">
                                 <h2>"Active Guests"</h2>
                                 <div class="table-responsive">
@@ -1829,6 +1808,50 @@ fn process_guess(
     } else if guesses.get().len() >= 6 {
         game_over.set(true);
         message.set(format!("Game over! The word was {}", target));
+    }
+}
+
+#[component]
+fn HouseScores(houses: Vec<House>) -> impl IntoView {
+    view! {
+        <section class="house-scores centered">
+            <h2>"House Scores"</h2>
+            <div class="scores-grid">
+                {houses
+                    .iter()
+                    .map(|house| {
+                        let bg_class = format!(
+                            "house-box {}",
+                            match house.id {
+                                1 => "gryffindor-bg",
+                                2 => "hufflepuff-bg",
+                                3 => "ravenclaw-bg",
+                                4 => "slytherin-bg",
+                                _ => "",
+                            },
+                        );
+                        let text_color_class = match house.id {
+                            1 => "gryffindor-text",
+                            2 => "hufflepuff-text",
+                            3 => "ravenclaw-text",
+                            4 => "slytherin-text",
+                            _ => "",
+                        };
+                        let display_name = house.name.to_uppercase();
+                        view! {
+                            <div class="score-row">
+                                <div class=bg_class>
+                                    <span class=text_color_class>{display_name}</span>
+                                </div>
+                                <div class="score-display">
+                                    <span class="score-number">{house.score}</span>
+                                </div>
+                            </div>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+        </section>
     }
 }
 
