@@ -236,3 +236,63 @@ pub struct NewHouseCrosswordCompletion {
     pub word_index: i32,
     // completed_at uses default (CURRENT_TIMESTAMP)
 }
+
+#[cfg(feature = "ssr")]
+#[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::voting_status)]
+#[diesel(check_for_backend(Sqlite))]
+pub struct VotingStatus {
+    pub id: i32,
+    pub is_open: i32, // 0=closed, 1=open
+    pub opened_at: Option<NaiveDateTime>,
+    pub closed_at: Option<NaiveDateTime>,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = crate::schema::voting_status)]
+pub struct NewVotingStatus {
+    pub is_open: i32,
+    pub opened_at: Option<chrono::NaiveDateTime>,
+    pub closed_at: Option<chrono::NaiveDateTime>,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Queryable, Selectable, Debug, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::votes)]
+#[diesel(check_for_backend(Sqlite))]
+pub struct Vote {
+    pub id: i32,
+    pub voter_id: i32,
+    pub first_choice_id: i32,
+    pub second_choice_id: i32,
+    pub third_choice_id: i32,
+    pub submitted_at: NaiveDateTime,
+}
+
+#[cfg(feature = "ssr")]
+#[derive(Insertable, Debug)]
+#[diesel(table_name = crate::schema::votes)]
+pub struct NewVote {
+    pub voter_id: i32,
+    pub first_choice_id: i32,
+    pub second_choice_id: i32,
+    pub third_choice_id: i32,
+    pub submitted_at: chrono::NaiveDateTime,
+}
+
+// Struct for RCV round results (used in app).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RcvRound {
+    pub round_number: usize,
+    pub tallies: Vec<(i32, i32)>, // (guest_id, vote_count)
+    pub eliminated: Vec<i32>,     // guest_ids eliminated this round
+    pub winner: Option<i32>,      // if declared
+}
+
+// Struct for full RCV result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RcvResult {
+    pub winner_id: Option<i32>,
+    pub rounds: Vec<RcvRound>,
+}

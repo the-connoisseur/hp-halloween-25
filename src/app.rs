@@ -18,13 +18,14 @@ use wasm_bindgen::JsCast;
 
 #[cfg(feature = "ssr")]
 use crate::{
-    award_points_to_house, create_admin_session, get_all_active_guests, get_all_houses,
-    get_all_point_awards, get_all_unregistered_guests, get_guest_by_token, get_guest_token,
-    get_house_crossword_progress, get_or_init_crossword_state, register_guest, reregister_guest,
-    unregister_guest, update_crossword_state, validate_admin_token,
+    award_points_to_house, close_voting, create_admin_session, get_all_active_guests,
+    get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
+    get_guest_token, get_house_crossword_progress, get_or_init_crossword_state, get_rcv_result,
+    has_voted, init_voting_status, open_voting, register_guest, reregister_guest, submit_vote,
+    unregister_guest, update_crossword_state, validate_admin_token, voting_is_open,
 };
 use crate::{
-    model::{CrosswordState, Guest, House, PointAwardLog, SparseState},
+    model::{CrosswordState, Guest, House, PointAwardLog, RcvResult, SparseState},
     Direction, WordDef, CROSSWORD_DEFS,
 };
 
@@ -457,6 +458,95 @@ pub async fn update_crossword_state_handler(sparse_state: SparseState) -> Result
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
+#[server(VotingIsOpen)]
+pub async fn voting_is_open_handler() -> Result<bool, AppError> {
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        voting_is_open(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(OpenVoting)]
+pub async fn open_voting_handler() -> Result<(), AppError> {
+    check_admin().await?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        open_voting(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(CloseVoting)]
+pub async fn close_voting_handler() -> Result<RcvResult, AppError> {
+    check_admin().await?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        close_voting(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(HasVoted)]
+pub async fn has_voted_handler() -> Result<bool, AppError> {
+    let maybe_user = get_current_user().await?;
+    let guest = maybe_user.ok_or(AppError::AuthError("Must be logged in".to_string()))?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        has_voted(&mut conn, guest.id).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(SubmitVote)]
+pub async fn submit_vote_handler(first: i32, second: i32, third: i32) -> Result<(), AppError> {
+    let maybe_user = get_current_user().await?;
+    let guest = maybe_user.ok_or(AppError::AuthError("Must be logged in".to_string()))?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        submit_vote(&mut conn, guest.id, first, second, third)
+            .map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetRcvResult)]
+pub async fn get_rcv_result_handler() -> Result<RcvResult, AppError> {
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        get_rcv_result(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetActiveGuestsForVoting)]
+pub async fn get_active_guests_for_voting() -> Result<Vec<Guest>, AppError> {
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_all_active_guests(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
 const WORDS: &[&str] = &[
     "apple", "bread", "break", "broad", "tread", "bleed", "dreab",
 ];
@@ -502,6 +592,7 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/admin") view=AdminDashboard />
                     <Route path=path!("/games/wordle") view=Wordle />
                     <Route path=path!("/games/crossword") view=Crossword />
+                    <Route path=path!("/games/best_dressed") view=BestDressed />
                 </Routes>
             </main>
         </Router>
@@ -539,6 +630,8 @@ fn Home() -> impl IntoView {
         }
     });
 
+    let voting_open_fetcher = Resource::new(|| (), |_| voting_is_open_handler());
+
     let games_section = move || {
         current_user_fetcher
             .get()
@@ -555,6 +648,28 @@ fn Home() -> impl IntoView {
                             <a class="btn-game" href="/games/crossword">
                                 "Horcrux Hunt"
                             </a>
+                            <Suspense fallback=|| {
+                                view! { <></> }
+                            }>
+                                {move || {
+                                    voting_open_fetcher
+                                        .get()
+                                        .and_then(|open_res| open_res.ok())
+                                        .map(|is_open| {
+                                            if is_open {
+                                                view! {
+                                                    <a class="btn-game" href="/games/best_dressed">
+                                                        "Best Dressed"
+                                                    </a>
+                                                }
+                                                    .into_any()
+                                            } else {
+                                                view! { <></> }.into_any()
+                                            }
+                                        })
+                                        .unwrap_or_else(|| view! { <></> }.into_any())
+                                }}
+                            </Suspense>
                         </div>
                     </section>
                 }
@@ -916,6 +1031,8 @@ fn AdminDashboard() -> impl IntoView {
     let point_awards_fetcher = Resource::new(|| (), |_| get_point_awards());
     let house_crossword_progress_fetcher =
         Resource::new(|| (), |_| get_house_crossword_progress_handler());
+    let voting_status_fetcher = Resource::new(|| (), |_| voting_is_open_handler());
+    let rcv_result_fetcher = Resource::new(|| (), |_| get_rcv_result_handler());
 
     // Redirects to the home page if a user who isn't logged in as an admin tries to visit the
     // admin dashboard.
@@ -1083,6 +1200,31 @@ fn AdminDashboard() -> impl IntoView {
                     show_qr_modal.set(true);
                 }
                 Err(e) => log!("Failed to generate QR: {}", e),
+            }
+        });
+    };
+
+    let open_voting_click = move |_| {
+        spawn_local(async move {
+            if leptos::leptos_dom::helpers::window()
+                .confirm_with_message("Open Best Dressed voting?")
+                .unwrap_or(false)
+            {
+                let _ = open_voting_handler().await;
+                voting_status_fetcher.refetch();
+            }
+        });
+    };
+
+    let close_voting_click = move |_| {
+        spawn_local(async move {
+            if leptos::leptos_dom::helpers::window()
+                .confirm_with_message("Close voting and compute winner?")
+                .unwrap_or(false)
+            {
+                let _ = close_voting_handler().await;
+                voting_status_fetcher.refetch();
+                rcv_result_fetcher.refetch();
             }
         });
     };
@@ -1473,6 +1615,165 @@ fn AdminDashboard() -> impl IntoView {
                                         </tbody>
                                     </table>
                                 </div>
+                            </section>
+
+                            <section class="admin-section">
+                                <h2>"Best Dressed Voting"</h2>
+                                <Suspense fallback=|| {
+                                    view! { <p>"Loading..."</p> }
+                                }>
+                                    {move || {
+                                        voting_status_fetcher
+                                            .with(|maybe_status| {
+                                                if let Some(Ok(is_open)) = maybe_status {
+                                                    if *is_open {
+                                                        view! {
+                                                            <p>
+                                                            <button class="btn-primary" on:click=close_voting_click>
+                                                                "Close Voting"
+                                                            </button>
+                                                            </p>
+                                                        }
+                                                            .into_any()
+                                                    } else {
+                                                        view! {
+                                                            <p>
+                                                            <button class="btn-primary" on:click=open_voting_click>
+                                                                "Open Voting"
+                                                            </button>
+                                                            </p>
+                                                        }
+                                                            .into_any()
+                                                    }
+                                                } else {
+                                                    view! { <p>"Loading status..."</p> }.into_any()
+                                                }
+                                            })
+                                    }}
+                                </Suspense>
+                                // Display RCV if closed.
+                                <Suspense fallback=|| {
+                                    view! { <></> }
+                                }>
+                                    {move || {
+                                        rcv_result_fetcher
+                                            .with(|maybe_result| {
+                                                if let Some(Ok(result)) = maybe_result {
+                                                    let result = result.clone();
+                                                    if let Some(winner_id) = result.winner_id {
+                                                        view! {
+                                                            <div class="rcv-display">
+                                                                <h3>
+                                                                    "Best Dressed Winner: "
+                                                                    {move || {
+                                                                        active_guests_fetcher
+                                                                            .with(|maybe_guests| {
+                                                                                if let Some(Ok(guests)) = maybe_guests {
+                                                                                    guests
+                                                                                        .iter()
+                                                                                        .find(|g| g.id == winner_id)
+                                                                                        .map(|g| g.name.clone())
+                                                                                } else {
+                                                                                    None
+                                                                                }
+                                                                            })
+                                                                            .unwrap_or("Unknown".to_string())
+                                                                    }}
+                                                                </h3>
+                                                                {result
+                                                                    .rounds
+                                                                    .iter()
+                                                                    .map(|round| {
+                                                                        let round = round.clone();
+                                                                        view! {
+                                                                            <div class="round">
+                                                                                <h4>"Round " {round.round_number}</h4>
+                                                                                <ul>
+                                                                                    {round
+                                                                                        .tallies
+                                                                                        .iter()
+                                                                                        .map(|(id, count)| {
+                                                                                            let id = *id;
+                                                                                            let count = *count;
+                                                                                            view! {
+                                                                                                <li>
+                                                                                                    {move || {
+                                                                                                        active_guests_fetcher
+                                                                                                            .with(|maybe_guests| {
+                                                                                                                if let Some(Ok(guests)) = maybe_guests {
+                                                                                                                    guests
+                                                                                                                        .iter()
+                                                                                                                        .find(|g| g.id == id)
+                                                                                                                        .map(|g| format!("{}: {}", g.name, count))
+                                                                                                                        .unwrap_or_else(|| format!("ID {}: {}", id, count))
+                                                                                                                } else {
+                                                                                                                    format!("ID {}: {}", id, count)
+                                                                                                                }
+                                                                                                            })
+                                                                                                    }}
+                                                                                                </li>
+                                                                                            }
+                                                                                        })
+                                                                                        .collect_view()}
+                                                                                </ul>
+                                                                                <div class="elim-section">
+                                                                                    {if !round.eliminated.is_empty() {
+                                                                                        view! {
+                                                                                            <p>
+                                                                                                "Eliminated: "
+                                                                                                {round
+                                                                                                    .eliminated
+                                                                                                    .iter()
+                                                                                                    .map(|&id| {
+                                                                                                        let id = id;
+                                                                                                        view! {
+                                                                                                            <span>
+                                                                                                                {move || {
+                                                                                                                    active_guests_fetcher
+                                                                                                                        .with(|maybe_guests| {
+                                                                                                                            if let Some(Ok(guests)) = maybe_guests {
+                                                                                                                                guests
+                                                                                                                                    .iter()
+                                                                                                                                    .find(|g| g.id == id)
+                                                                                                                                    .map(|g| g.name.clone())
+                                                                                                                                    .unwrap_or_else(|| format!("ID {}", id))
+                                                                                                                            } else {
+                                                                                                                                format!("ID: {}", id)
+                                                                                                                            }
+                                                                                                                        })
+                                                                                                                }}
+                                                                                                            </span>
+                                                                                                        }
+                                                                                                    })
+                                                                                                    .collect_view()}
+                                                                                            </p>
+                                                                                        }
+                                                                                            .into_any()
+                                                                                    } else {
+                                                                                        view! { <></> }.into_any()
+                                                                                    }}
+                                                                                </div>
+                                                                            </div>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()}
+                                                            </div>
+                                                        }
+                                                            .into_any()
+                                                    } else {
+                                                        view! {
+                                                            <div class="rcv-display">
+                                                                <p>"No winner yet."</p>
+                                                            </div>
+                                                        }
+                                                            .into_any()
+                                                    }
+                                                } else {
+                                                    view! { <></> }.into_any()
+                                                }
+                                            })
+                                    }}
+                                </Suspense>
                             </section>
 
                             <section class="admin-section">
@@ -2081,6 +2382,292 @@ fn word_is_complete(grid: &Vec<Vec<Option<char>>>, def: &WordDef) -> bool {
         }
     }
     true
+}
+
+#[component]
+fn BestDressed() -> impl IntoView {
+    let current_user_fetcher = Resource::new(|| (), |_| get_current_user());
+    let voting_open_fetcher = Resource::new(|| (), |_| voting_is_open_handler());
+    let has_voted_fetcher = Resource::new(|| (), |_| has_voted_handler());
+    let guests_fetcher = Resource::new(|| (), |_| get_active_guests_for_voting());
+    let rcv_result_fetcher = Resource::new(|| (), |_| get_rcv_result_handler());
+
+    let first_choice = RwSignal::new(0i32);
+    let second_choice = RwSignal::new(0i32);
+    let third_choice = RwSignal::new(0i32);
+    let error = RwSignal::new(String::new());
+    let success = RwSignal::new(false);
+
+    let submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let f = first_choice.get();
+        let s = second_choice.get();
+        let t = third_choice.get();
+        if f == 0 || s == 0 || t == 0 || f == s || f == t || s == t {
+            error.set("Select three unique guests.".to_string());
+            return;
+        }
+        spawn_local(async move {
+            match submit_vote_handler(f, s, t).await {
+                Ok(_) => {
+                    error.set(String::new());
+                    success.set(true);
+                    has_voted_fetcher.refetch();
+                }
+                Err(e) => error.set(e.to_string()),
+            }
+        });
+    };
+
+    view! {
+        <div class="best-dressed">
+            <a class="back-link" href="/">
+                "← Home"
+            </a>
+            <h1>"Best Dressed Voting"</h1>
+            <Suspense fallback=|| {
+                view! { <p>"Loading..."</p> }
+            }>
+                {move || {
+                    if let (Some(Ok(user)), Some(Ok(is_open)), Some(Ok(has_voted))) = (
+                        current_user_fetcher.get(),
+                        voting_open_fetcher.get(),
+                        has_voted_fetcher.get(),
+                    ) {
+                        if !is_open {
+                            view! { <p>"Voting is closed."</p> }.into_any()
+                        } else if has_voted {
+                            view! { <p>"Your vote has been submitted."</p> }.into_any()
+                        } else {
+                            let user = user.clone();
+                            view! {
+                                <form on:submit=submit>
+                                    <div class="form-group">
+                                        <label>
+                                            "1st Choice: "
+                                            <select on:change=move |e| {
+                                                first_choice
+                                                    .set(event_target_value(&e).parse().unwrap_or(0))
+                                            }>
+                                                <option value="0">"Select"</option>
+                                                {
+                                                let user = user.clone();
+                                                move || {
+                                                    guests_fetcher
+                                                        .get()
+                                                        .and_then(|g_res| g_res.ok())
+                                                        .map(|guests| {
+                                                            guests
+                                                                .into_iter()
+                                                                .filter(|g| {
+                                                                    g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
+                                                                })
+                                                                .map(|g| {
+                                                                    view! { <option value=g.id>{g.name}</option> }
+                                                                })
+                                                                .collect_view()
+                                                        })
+                                                        .unwrap_or_default()
+                                                }}
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "2nd Choice: "
+                                            <select on:change=move |e| {
+                                                second_choice
+                                                    .set(event_target_value(&e).parse().unwrap_or(0))
+                                            }>
+                                                <option value="0">"Select"</option>
+                                                {
+                                                let user = user.clone();
+                                                move || {
+                                                    guests_fetcher
+                                                        .get()
+                                                        .and_then(|g_res| g_res.ok())
+                                                        .map(|guests| {
+                                                            guests
+                                                                .into_iter()
+                                                                .filter(|g| {
+                                                                    g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
+                                                                })
+                                                                .map(|g| {
+                                                                    view! { <option value=g.id>{g.name}</option> }
+                                                                })
+                                                                .collect_view()
+                                                        })
+                                                        .unwrap_or_default()
+                                                }}
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            "3rd Choice: "
+                                            <select on:change=move |e| {
+                                                third_choice
+                                                    .set(event_target_value(&e).parse().unwrap_or(0))
+                                            }>
+                                                <option value="0">"Select"</option>
+                                                {
+                                                let user = user.clone();
+                                                move || {
+                                                    guests_fetcher
+                                                        .get()
+                                                        .and_then(|g_res| g_res.ok())
+                                                        .map(|guests| {
+                                                            guests
+                                                                .into_iter()
+                                                                .filter(|g| {
+                                                                    g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
+                                                                })
+                                                                .map(|g| {
+                                                                    view! { <option value=g.id>{g.name}</option> }
+                                                                })
+                                                                .collect_view()
+                                                        })
+                                                        .unwrap_or_default()
+                                                }}
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <button type="submit" class="btn-primary">
+                                        "Vote"
+                                    </button>
+                                </form>
+                                {move || {
+                                    let err_msg = error.get();
+                                    if !err_msg.is_empty() {
+                                        view! { <p class="error">{err_msg}</p> }.into_any()
+                                    } else {
+                                        view! { <></> }.into_any()
+                                    }
+                                }}
+                                {move || success.get().then(|| view! { <p>"Vote submitted!"</p> })}
+                            }
+                                .into_any()
+                        }
+                    } else {
+                        view! { <p>"Loading..."</p> }.into_any()
+                    }
+                }}
+            </Suspense>
+            // Display winner if closed.
+            <Suspense fallback=|| {
+                view! { <></> }
+            }>
+                {move || {
+                    rcv_result_fetcher
+                        .get()
+                        .and_then(|r_res| r_res.ok())
+                        .map(|result| {
+                            let result = result.clone();
+                            let rounds = result.rounds.clone();
+                            if let Some(winner_id) = result.winner_id {
+                                view! {
+                                    <section class="winner-section">
+                                        <h2>"Winner: "</h2>
+                                        {move || {
+                                            guests_fetcher
+                                                .get()
+                                                .and_then(|g_res| g_res.ok())
+                                                .and_then(|guests| {
+                                                    guests
+                                                        .into_iter()
+                                                        .find(|g| g.id == winner_id)
+                                                        .map(|winner| {
+                                                            view! { <p>{winner.name}!</p> }
+                                                        })
+                                                })
+                                        }}
+                                        <h3>"Rounds:"</h3>
+                                        {rounds
+                                            .iter()
+                                            .map(|round| {
+                                                let round = round.clone();
+                                                let tallies = round.tallies.clone();
+                                                view! {
+                                                    <div class="round">
+                                                        <h4>"Round " {round.round_number}</h4>
+                                                        <ul>
+                                                            {tallies
+                                                                .into_iter()
+                                                                .map(|(id, count)| {
+                                                                    let id = id;
+                                                                    let count = count;
+                                                                    view! {
+                                                                        <li>
+                                                                            {move || {
+                                                                                guests_fetcher
+                                                                                    .get()
+                                                                                    .and_then(|g_res| g_res.ok())
+                                                                                    .and_then(|guests| {
+                                                                                        guests
+                                                                                            .iter()
+                                                                                            .find(|g| g.id == id)
+                                                                                            .map(|g| {
+                                                                                                view! {
+                                                                                                    {g.name.clone()}
+                                                                                                    ": "
+                                                                                                    {count}
+                                                                                                }
+                                                                                            })
+                                                                                    })
+                                                                            }}
+                                                                        </li>
+                                                                    }
+                                                                })
+                                                                .collect_view()}
+                                                        </ul>
+                                                        {if !round.eliminated.is_empty() {
+                                                            view! {
+                                                                <p>
+                                                                    "Eliminated: "
+                                                                    {round
+                                                                        .eliminated
+                                                                        .iter()
+                                                                        .map(|&id| {
+                                                                            move || {
+                                                                                guests_fetcher
+                                                                                    .get()
+                                                                                    .and_then(|g_res| g_res.ok())
+                                                                                    .and_then(|guests| {
+                                                                                        guests
+                                                                                            .iter()
+                                                                                            .find(|g| g.id == id)
+                                                                                            .map(|g| {
+                                                                                                view! {
+                                                                                                    {g.name.clone()}
+                                                                                                    ", "
+                                                                                                }
+                                                                                            })
+                                                                                    })
+                                                                            }
+                                                                        })
+                                                                        .collect_view()}
+                                                                </p>
+                                                            }
+                                                                .into_any()
+                                                        } else {
+                                                            view! { <></> }.into_any()
+                                                        }}
+                                                    </div>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </section>
+                                }
+                                    .into_any()
+                            } else {
+                                view! { <></> }.into_any()
+                            }
+                        })
+                        .unwrap_or_else(|| view! { <></> }.into_any())
+                }}
+            </Suspense>
+        </div>
+    }
 }
 
 #[cfg(test)]

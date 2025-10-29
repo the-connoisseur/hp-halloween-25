@@ -17,6 +17,8 @@ use dotenvy::dotenv;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 #[cfg(feature = "ssr")]
+use std::collections::{HashMap, HashSet};
+#[cfg(feature = "ssr")]
 use std::env;
 #[cfg(feature = "ssr")]
 use std::io::{Error as IoError, ErrorKind};
@@ -26,13 +28,13 @@ use uuid::Uuid;
 #[cfg(feature = "ssr")]
 use crate::model::{
     CrosswordState, DbCrosswordState, Guest, House, HouseCrosswordCompletion, NewAdminSession,
-    NewDbCrosswordState, NewHouseCrosswordCompletion, NewPointAward, NewSession, PointAward,
-    PointAwardLog,
+    NewDbCrosswordState, NewHouseCrosswordCompletion, NewPointAward, NewSession, NewVote,
+    NewVotingStatus, PointAward, PointAwardLog, RcvResult, RcvRound, Vote, VotingStatus,
 };
 #[cfg(feature = "ssr")]
 use crate::schema::{
     admin_sessions, crossword_states, guests, house_crossword_completions, houses, point_awards,
-    sessions,
+    sessions, votes, voting_status,
 };
 
 #[cfg(feature = "hydrate")]
@@ -550,9 +552,7 @@ pub fn get_all_active_guests(
         .load(conn)
 }
 
-/// Resets the entire database to its initial state: deactivates all guests, clears their scores,
-/// characters, registration timestamps, and house assignments; resets house scores to zero;
-/// deletes all sessions (guest and admin) and all point award entries.
+/// Resets the entire database to its initial state.
 #[cfg(feature = "ssr")]
 pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
     conn.transaction(|conn| {
@@ -568,6 +568,18 @@ pub fn reset_database(conn: &mut SqliteConnection) -> Result<(), diesel::result:
 
         // Delete all house crossword completion entries.
         diesel::delete(house_crossword_completions::table).execute(conn)?;
+
+        // Delete all votes.
+        diesel::delete(votes::table).execute(conn)?;
+
+        // Reset voting status.
+        diesel::update(voting_status::table)
+            .set((
+                voting_status::is_open.eq(0i32),
+                voting_status::opened_at.eq::<Option<chrono::NaiveDateTime>>(None),
+                voting_status::closed_at.eq::<Option<chrono::NaiveDateTime>>(None),
+            ))
+            .execute(conn)?;
 
         // Reset all guests.
         diesel::update(guests::table)
@@ -805,11 +817,258 @@ pub fn insert_house_word_completion(
     Ok(())
 }
 
+/// Initializes the voting status table with a singleton row.
+#[cfg(feature = "ssr")]
+pub fn init_voting_status(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
+    let count: i64 = voting_status::table.count().get_result(conn)?;
+    if count == 0 {
+        let new_status = NewVotingStatus {
+            is_open: 0,
+            opened_at: None,
+            closed_at: None,
+        };
+        diesel::insert_into(voting_status::table)
+            .values(&new_status)
+            .execute(conn)?;
+    }
+    Ok(())
+}
+
+/// Returns true if voting is open, false otherwise.
+#[cfg(feature = "ssr")]
+pub fn voting_is_open(conn: &mut SqliteConnection) -> Result<bool, diesel::result::Error> {
+    let status: Option<VotingStatus> = voting_status::table.first(conn).optional()?;
+    Ok(status.map_or(false, |s| s.is_open == 1))
+}
+
+#[cfg(feature = "ssr")]
+pub fn open_voting(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
+    conn.transaction(|conn| {
+        let now = Utc::now().naive_utc();
+        diesel::update(voting_status::table)
+            .set((
+                voting_status::is_open.eq(1i32),
+                voting_status::opened_at.eq(Some(now)),
+                voting_status::closed_at.eq::<Option<chrono::NaiveDateTime>>(None),
+            ))
+            .execute(conn)?;
+        Ok(())
+    })
+}
+
+#[cfg(feature = "ssr")]
+pub fn close_voting(conn: &mut SqliteConnection) -> Result<RcvResult, diesel::result::Error> {
+    conn.transaction(|conn| {
+        let now = Utc::now().naive_utc();
+        diesel::update(voting_status::table)
+            .set((
+                voting_status::is_open.eq(0i32),
+                voting_status::closed_at.eq(Some(now)),
+            ))
+            .execute(conn)?;
+
+        get_rcv_result(conn)
+    })
+}
+
+#[cfg(feature = "ssr")]
+pub fn submit_vote(
+    conn: &mut SqliteConnection,
+    voter_id: i32,
+    first: i32,
+    second: i32,
+    third: i32,
+) -> Result<(), diesel::result::Error> {
+    conn.transaction(|conn| {
+        if !voting_is_open(conn)? {
+            return Err(diesel::result::Error::QueryBuilderError(Box::new(
+                IoError::new(ErrorKind::Other, "Voting is not open"),
+            )));
+        }
+
+        let voter_active: i64 = guests::table
+            .filter(guests::id.eq(voter_id).and(guests::is_active.eq(1i32)))
+            .count()
+            .get_result(conn)?;
+        if voter_active == 0 {
+            return Err(diesel::result::Error::NotFound);
+        }
+
+        let choices = [first, second, third];
+        let mut choice_set = HashSet::new();
+        for &choice_id in &choices {
+            if choice_id == voter_id {
+                return Err(diesel::result::Error::QueryBuilderError(Box::new(
+                    IoError::new(ErrorKind::Other, "Cannot vote for self"),
+                )));
+            }
+            if !choice_set.insert(choice_id) {
+                return Err(diesel::result::Error::QueryBuilderError(Box::new(
+                    IoError::new(ErrorKind::Other, "Choices must be unique"),
+                )));
+            }
+            let active: i64 = guests::table
+                .filter(guests::id.eq(choice_id).and(guests::is_active.eq(1i32)))
+                .count()
+                .get_result(conn)?;
+            if active == 0 {
+                return Err(diesel::result::Error::NotFound);
+            }
+        }
+
+        diesel::delete(votes::table.filter(votes::voter_id.eq(voter_id))).execute(conn)?;
+
+        let new_vote = NewVote {
+            voter_id,
+            first_choice_id: first,
+            second_choice_id: second,
+            third_choice_id: third,
+            submitted_at: Utc::now().naive_utc(),
+        };
+        diesel::insert_into(votes::table)
+            .values(&new_vote)
+            .execute(conn)?;
+
+        Ok(())
+    })
+}
+
+#[cfg(feature = "ssr")]
+pub fn has_voted(
+    conn: &mut SqliteConnection,
+    voter_id: i32,
+) -> Result<bool, diesel::result::Error> {
+    let count: i64 = votes::table
+        .filter(votes::voter_id.eq(voter_id))
+        .count()
+        .get_result(conn)?;
+    Ok(count > 0)
+}
+
+#[cfg(feature = "ssr")]
+pub fn get_all_votes(conn: &mut SqliteConnection) -> Result<Vec<Vote>, diesel::result::Error> {
+    votes::table.select(Vote::as_select()).load(conn)
+}
+
+#[cfg(feature = "ssr")]
+pub fn compute_rcv(votes: &[Vote], candidates: &[i32]) -> RcvResult {
+    if candidates.is_empty() {
+        return RcvResult {
+            winner_id: None,
+            rounds: vec![],
+        };
+    }
+
+    let mut active_candidates: HashSet<i32> = candidates.iter().cloned().collect();
+    let mut active_ballots: Vec<&Vote> = votes.iter().collect();
+    let mut rounds = vec![];
+
+    let mut round_number = 1;
+    while !active_candidates.is_empty() {
+        // Step 1: Tally all active votes.
+        let mut tallies = HashMap::<i32, i32>::new();
+        for vote in &active_ballots {
+            if active_candidates.contains(&vote.first_choice_id) {
+                *tallies.entry(vote.first_choice_id).or_insert(0) += 1;
+            } else if active_candidates.contains(&vote.second_choice_id) {
+                *tallies.entry(vote.second_choice_id).or_insert(0) += 1;
+            } else if active_candidates.contains(&vote.third_choice_id) {
+                *tallies.entry(vote.third_choice_id).or_insert(0) += 1;
+            }
+        }
+
+        // Prepare round tallies and sort them descending.
+        let mut round_tallies: Vec<(i32, i32)> = active_candidates
+            .iter()
+            .map(|&c| (c, tallies.get(&c).copied().unwrap_or(0)))
+            .collect();
+        round_tallies.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        rounds.push(RcvRound {
+            round_number: round_number,
+            tallies: round_tallies.clone(),
+            eliminated: vec![],
+            winner: None,
+        });
+
+        // Step 2: Check for majority on non-discarded ballots.
+        let total_ballots = active_ballots.len() as i32;
+        let majority_threshold = if total_ballots > 0 {
+            ((total_ballots as f64 * 0.5).ceil() as i32).max(1)
+        } else {
+            0
+        };
+        // There's a subtle edge case here - two candidates can have equal votes and both have the
+        // majority (eg. 3 votes each among 6 active ballots). So we want to check that a candidate
+        // has the majority _and_ the clear lead before declaring a winner.
+        let top_count = round_tallies.first().map(|(_, count)| *count).unwrap_or(0);
+        let is_clear_top = round_tallies.len() < 2 || round_tallies[1].1 < top_count;
+        if top_count >= majority_threshold && is_clear_top {
+            if let Some((winner_id, _)) = round_tallies.first() {
+                rounds.last_mut().unwrap().winner = Some(*winner_id);
+                return RcvResult {
+                    winner_id: Some(*winner_id),
+                    rounds,
+                };
+            }
+        }
+
+        // Step 3: No majority - eliminate candidates with least votes, and eliminate ballots that
+        // don't contain at least one active candidate.
+        let min_votes = round_tallies.last().map(|(_, count)| *count).unwrap_or(0);
+        let to_eliminate: Vec<i32> = round_tallies
+            .iter()
+            .filter(|&(_, count)| *count == min_votes)
+            .map(|&(id, _)| id)
+            .collect();
+
+        for &id in &to_eliminate {
+            active_candidates.remove(&id);
+        }
+        rounds.last_mut().unwrap().eliminated = to_eliminate;
+
+        active_ballots.retain(|vote| {
+            active_candidates.contains(&vote.first_choice_id)
+                || active_candidates.contains(&vote.second_choice_id)
+                || active_candidates.contains(&vote.third_choice_id)
+        });
+
+        round_number += 1;
+    }
+
+    RcvResult {
+        winner_id: None,
+        rounds: rounds,
+    }
+}
+
+#[cfg(feature = "ssr")]
+pub fn get_rcv_result(conn: &mut SqliteConnection) -> Result<RcvResult, diesel::result::Error> {
+    if voting_is_open(conn)? {
+        return Err(diesel::result::Error::QueryBuilderError(Box::new(
+            IoError::new(
+                ErrorKind::Other,
+                "RCV computation unavailable: voting is still open",
+            ),
+        )));
+    }
+
+    let votes: Vec<Vote> = get_all_votes(conn)?;
+    let candidates: Vec<i32> = get_all_active_guests(conn)?
+        .into_iter()
+        .map(|g| g.id)
+        .collect();
+
+    Ok(compute_rcv(&votes, &candidates))
+}
+
 #[cfg(all(test, feature = "ssr"))]
 mod tests {
     use super::*;
-    use crate::model::{AdminSession, NewGuest};
+    use crate::has_voted;
+    use crate::model::{AdminSession, NewGuest, Vote};
     use crate::schema::houses::dsl::*;
+    use chrono::Utc;
 
     // Helper to run a test in a transaction. This always rolls back the transaction at the end of
     // the test to maintain a clean slate in the database.
@@ -1707,5 +1966,846 @@ mod tests {
 
             Ok(())
         });
+    }
+
+    #[test]
+    fn test_init_voting_status() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+            let status: VotingStatus = voting_status::table
+                .first(conn)
+                .expect("Should not fail to read the first row of voting_status table");
+            assert_eq!(status.id, 1);
+            assert_eq!(status.is_open, 0);
+            assert!(status.opened_at.is_none());
+            assert!(status.closed_at.is_none());
+
+            // No error on second call.
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_voting_is_open() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+            assert!(!voting_is_open(conn).expect("Should not fail to check if voting is open"));
+
+            diesel::update(voting_status::table)
+                .set(voting_status::is_open.eq(1i32))
+                .execute(conn)
+                .expect("Should not fail update voting_status table");
+            assert!(voting_is_open(conn).expect("Should not fail to check if voting is open"));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_open_voting() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+
+            open_voting(conn).expect("Should not fail to open voting");
+            let status: VotingStatus = voting_status::table
+                .first(conn)
+                .expect("Should not fail to retrieve first row of voting_status table");
+            assert_eq!(status.is_open, 1);
+            assert!(status.opened_at.is_some());
+            assert!(status.closed_at.is_none());
+
+            open_voting(conn).expect("Should not fail to open voting");
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_close_voting_no_votes() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+            open_voting(conn).expect("Should not faile to open voting");
+
+            let result = close_voting(conn).expect("Should not fail to close voting");
+            assert_eq!(result.winner_id, None);
+            assert_eq!(result.rounds.len(), 0);
+
+            let status: VotingStatus = voting_status::table
+                .first(conn)
+                .expect("Should not fail to retrieve first row of voting_status table");
+            assert_eq!(status.is_open, 0);
+            assert!(status.closed_at.is_some());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_submit_vote_valid() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn)?;
+            open_voting(conn)?;
+
+            let voter_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Voter",
+                        house_id: Some(1),
+                        character: Some("Voter Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_1: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 1",
+                        house_id: Some(2),
+                        character: Some("C1 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_2: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 2",
+                        house_id: Some(3),
+                        character: Some("C2 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_3: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 3",
+                        house_id: Some(4),
+                        character: Some("C3 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            submit_vote(conn, voter_id, choice_1, choice_2, choice_3).expect("Should not fail");
+            let vote: Vote = votes::table.first(conn)?;
+            assert_eq!(vote.voter_id, voter_id);
+            assert_eq!(vote.first_choice_id, choice_1);
+            assert_eq!(vote.second_choice_id, choice_2);
+            assert_eq!(vote.third_choice_id, choice_3);
+
+            // Submitting again from the same voter should overwrite.
+            submit_vote(conn, voter_id, choice_2, choice_3, choice_1).expect("Should not fail");
+            let vote: Vote = votes::table.first(conn)?;
+            assert_eq!(vote.voter_id, voter_id);
+            assert_eq!(vote.first_choice_id, choice_2);
+            assert_eq!(vote.second_choice_id, choice_3);
+            assert_eq!(vote.third_choice_id, choice_1);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_submit_vote_invalid_self() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+            open_voting(conn).expect("Should not fail to open voting");
+
+            let voter_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Voter",
+                        house_id: Some(1),
+                        character: Some("Voter Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let _choice_2_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 2",
+                        house_id: Some(3),
+                        character: Some("C2 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let _choice_3_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 3",
+                        house_id: Some(4),
+                        character: Some("C3 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            let err =
+                submit_vote(conn, voter_id, voter_id, 2, 3).expect_err("Should fail self-vote");
+            assert!(matches!(err, diesel::result::Error::QueryBuilderError(_)));
+            if let diesel::result::Error::QueryBuilderError(e) = err {
+                assert!(e.to_string().contains("Cannot vote for self"));
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_submit_vote_invalid_duplicate() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn).expect("Should not fail to initialize voting_status table");
+            open_voting(conn).expect("Should not fail to open voting");
+
+            let voter_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Voter",
+                        house_id: Some(1),
+                        character: Some("Voter Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_2_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 2",
+                        house_id: Some(3),
+                        character: Some("C2 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_3_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 3",
+                        house_id: Some(4),
+                        character: Some("C3 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            let err = submit_vote(conn, voter_id, choice_2_id, choice_2_id, choice_3_id)
+                .expect_err("Should fail self-vote");
+            assert!(matches!(err, diesel::result::Error::QueryBuilderError(_)));
+            if let diesel::result::Error::QueryBuilderError(e) = err {
+                assert!(e.to_string().contains("Choices must be unique"));
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_submit_vote_closed() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn)
+                .expect("Unexpectedly failed to initialize voting_status table");
+
+            let err = submit_vote(conn, 1, 2, 3, 4).expect_err("Should fail when voting is closed");
+            assert!(matches!(err, diesel::result::Error::QueryBuilderError(_)));
+            if let diesel::result::Error::QueryBuilderError(e) = err {
+                assert!(e.to_string().contains("Voting is not open"));
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_has_voted() {
+        run_test_in_transaction(|conn| {
+            init_voting_status(conn)
+                .expect("Unexpectedly failed to initialize voting_status table");
+            open_voting(conn).expect("Unexpectedly failed to open voting");
+
+            let voter_id: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Voter",
+                        house_id: Some(1),
+                        character: Some("Voter Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_1: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 1",
+                        house_id: Some(2),
+                        character: Some("C1 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_2: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 2",
+                        house_id: Some(3),
+                        character: Some("C2 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+            let choice_3: i32 = diesel::insert_into(guests::table)
+                .values((
+                    NewGuest {
+                        name: "Choice 3",
+                        house_id: Some(4),
+                        character: Some("C3 Char"),
+                        registered_at: Some(Utc::now().naive_utc()),
+                    },
+                    guests::is_active.eq(1i32),
+                ))
+                .returning(guests::id)
+                .get_result(conn)?;
+
+            assert!(!has_voted(conn, voter_id)
+                .expect("Unexpectedly failed to check if voter has voted"));
+
+            submit_vote(conn, voter_id, choice_1, choice_2, choice_3).expect("Should not fail");
+            assert!(
+                has_voted(conn, voter_id).expect("Unexpectedly failed to check if voter has voted")
+            );
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_compute_rcv_majority_first_round() {
+        // In this scenario, there are 3 candidates. 1 wins by majority in the first round.
+        let vote_1 = Vote {
+            id: 1,
+            voter_id: 10,
+            first_choice_id: 1,
+            second_choice_id: 2,
+            third_choice_id: 3,
+            submitted_at: Utc::now().naive_utc(),
+        };
+        let vote_2 = Vote {
+            id: 1,
+            voter_id: 11,
+            first_choice_id: 1,
+            second_choice_id: 2,
+            third_choice_id: 3,
+            submitted_at: Utc::now().naive_utc(),
+        };
+        let vote_3 = Vote {
+            id: 1,
+            voter_id: 12,
+            first_choice_id: 1,
+            second_choice_id: 2,
+            third_choice_id: 3,
+            submitted_at: Utc::now().naive_utc(),
+        };
+        let votes = vec![vote_1, vote_2, vote_3];
+        let candidates = vec![1, 2, 3];
+
+        let result = compute_rcv(&votes, &candidates);
+        assert_eq!(result.winner_id, Some(1));
+        assert_eq!(result.rounds.len(), 1);
+        assert_eq!(result.rounds[0].tallies, vec![(1, 3), (2, 0), (3, 0)]);
+        assert!(result.rounds[0].eliminated.is_empty());
+        assert_eq!(result.rounds[0].winner, Some(1));
+    }
+
+    #[test]
+    fn test_compute_rcv_majority_second_round() {
+        // In this scenario, there are 4 candidates. 1 starts off with a strong lead, and goes on
+        // to win in the second round when 4 is eliminated and their vote goes to 1.
+        let votes = vec![
+            Vote {
+                id: 1,
+                voter_id: 10,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 2,
+                voter_id: 11,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 3,
+                voter_id: 12,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 4,
+                voter_id: 13,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 5,
+                voter_id: 14,
+                first_choice_id: 2,
+                second_choice_id: 1,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 6,
+                voter_id: 15,
+                first_choice_id: 2,
+                second_choice_id: 1,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 7,
+                voter_id: 16,
+                first_choice_id: 3,
+                second_choice_id: 2,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 8,
+                voter_id: 17,
+                first_choice_id: 3,
+                second_choice_id: 2,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 9,
+                voter_id: 18,
+                first_choice_id: 4,
+                second_choice_id: 1,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+        ];
+        let candidates = vec![1, 2, 3, 4];
+
+        let result = compute_rcv(&votes, &candidates);
+        assert_eq!(result.winner_id, Some(1));
+        assert_eq!(result.rounds.len(), 2);
+        assert_eq!(
+            result.rounds[0].tallies,
+            vec![(1, 4), (2, 2), (3, 2), (4, 1)]
+        );
+        assert_eq!(result.rounds[0].eliminated, vec![4]);
+        assert_eq!(result.rounds[0].winner, None);
+        assert_eq!(result.rounds[1].tallies, vec![(1, 5), (2, 2), (3, 2)]);
+        assert!(result.rounds[1].eliminated.is_empty());
+        assert_eq!(result.rounds[1].winner, Some(1));
+    }
+
+    #[test]
+    fn test_compute_rcv_majority_third_round_comeback_win() {
+        // In this scenario, there are 4 candidates. 1 starts off with a strong lead, but 2
+        // eventually comes back to win it by gaining the ballots of 3 and 4 when they are
+        // eliminated.
+        let votes = vec![
+            Vote {
+                id: 1,
+                voter_id: 10,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 2,
+                voter_id: 11,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 3,
+                voter_id: 12,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 4,
+                voter_id: 13,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 5,
+                voter_id: 14,
+                first_choice_id: 2,
+                second_choice_id: 1,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 6,
+                voter_id: 15,
+                first_choice_id: 2,
+                second_choice_id: 1,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 7,
+                voter_id: 16,
+                first_choice_id: 3,
+                second_choice_id: 2,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 8,
+                voter_id: 17,
+                first_choice_id: 3,
+                second_choice_id: 2,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 9,
+                voter_id: 18,
+                first_choice_id: 4,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+        ];
+        let candidates = vec![1, 2, 3, 4];
+
+        let result = compute_rcv(&votes, &candidates);
+        assert_eq!(result.winner_id, Some(2));
+        assert_eq!(result.rounds.len(), 3);
+        // Round 1: 1 > 4, 2 > 2, 3 > 2, 4 > 1
+        // No majority. 4 is eliminated.
+        assert_eq!(
+            result.rounds[0].tallies,
+            vec![(1, 4), (2, 2), (3, 2), (4, 1)]
+        );
+        assert_eq!(result.rounds[0].eliminated, vec![4]);
+        assert_eq!(result.rounds[0].winner, None);
+        // Round 2: 1 > 4, 2 > 3, 3 > 2
+        // No majority. 4 is eliminated.
+        assert_eq!(result.rounds[1].tallies, vec![(1, 4), (2, 3), (3, 2)]);
+        assert_eq!(result.rounds[1].eliminated, vec![3]);
+        assert_eq!(result.rounds[1].winner, None);
+        // Round 3: 1 > 4, 2 > 5
+        // 2 wins by majority.
+        assert_eq!(result.rounds[2].tallies, vec![(2, 5), (1, 4)]);
+        assert!(result.rounds[2].eliminated.is_empty());
+        assert_eq!(result.rounds[2].winner, Some(2));
+    }
+
+    #[test]
+    fn test_compute_rcv_one_candidate_remaining() {
+        // In this scenario, there are 4 candidates. 1 starts off with a slim lead, but 2, 3, 4 are
+        // tied lowest in the first round and all get eliminated, so 1 wins by default in the
+        // second round.
+        let votes = vec![
+            Vote {
+                id: 1,
+                voter_id: 10,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 2,
+                voter_id: 11,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 3,
+                voter_id: 12,
+                first_choice_id: 2,
+                second_choice_id: 3,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 4,
+                voter_id: 13,
+                first_choice_id: 3,
+                second_choice_id: 2,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 5,
+                voter_id: 14,
+                first_choice_id: 4,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+        ];
+        let candidates = vec![1, 2, 3, 4];
+
+        let result = compute_rcv(&votes, &candidates);
+        assert_eq!(result.winner_id, Some(1));
+        assert_eq!(result.rounds.len(), 2);
+        // Round 1: 1 > 2, 2 > 1, 3 > 1, 4 > 1
+        // No majority. 2, 3, 4 are eliminated.
+        assert_eq!(
+            result.rounds[0].tallies,
+            vec![(1, 2), (2, 1), (3, 1), (4, 1)]
+        );
+        assert_eq!(result.rounds[0].eliminated, vec![2, 3, 4]);
+        assert_eq!(result.rounds[0].winner, None);
+        // Round 2: 1 > 4
+        // 1 is the only remaining candidate, and wins.
+        assert_eq!(result.rounds[1].tallies, vec![(1, 4)]);
+        assert!(result.rounds[1].eliminated.is_empty());
+        assert_eq!(result.rounds[1].winner, Some(1));
+    }
+
+    #[test]
+    fn test_compute_rcv_tie_first_round() {
+        // In this scenario, there are 4 candidates. They all receive the same number of votes, so
+        // it's a tie in the first round.
+        let votes = vec![
+            Vote {
+                id: 1,
+                voter_id: 10,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 2,
+                voter_id: 11,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 3,
+                voter_id: 12,
+                first_choice_id: 2,
+                second_choice_id: 3,
+                third_choice_id: 4,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 4,
+                voter_id: 13,
+                first_choice_id: 2,
+                second_choice_id: 3,
+                third_choice_id: 4,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 5,
+                voter_id: 14,
+                first_choice_id: 3,
+                second_choice_id: 4,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 6,
+                voter_id: 15,
+                first_choice_id: 3,
+                second_choice_id: 4,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 7,
+                voter_id: 16,
+                first_choice_id: 4,
+                second_choice_id: 1,
+                third_choice_id: 2,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 8,
+                voter_id: 17,
+                first_choice_id: 4,
+                second_choice_id: 1,
+                third_choice_id: 2,
+                submitted_at: Utc::now().naive_utc(),
+            },
+        ];
+        let candidates = vec![1, 2, 3, 4];
+
+        let result = compute_rcv(&votes, &candidates);
+        assert_eq!(result.winner_id, None);
+        assert_eq!(result.rounds.len(), 1);
+        // Round 1: 1 > 2, 2 > 2, 3 > 2, 4 > 2
+        // No majority. All are eliminated.
+        assert_eq!(
+            result.rounds[0].tallies,
+            vec![(1, 2), (2, 2), (3, 2), (4, 2)]
+        );
+        assert_eq!(result.rounds[0].eliminated, vec![1, 2, 3, 4]);
+        assert_eq!(result.rounds[0].winner, None);
+    }
+
+    #[test]
+    fn test_compute_rcv_tie_multiple_rounds() {
+        // In this scenario, there are 6 candidates. After 3 rounds, it's a tie.
+        let votes = vec![
+            Vote {
+                id: 1,
+                voter_id: 10,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 2,
+                voter_id: 11,
+                first_choice_id: 1,
+                second_choice_id: 2,
+                third_choice_id: 3,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 3,
+                voter_id: 12,
+                first_choice_id: 2,
+                second_choice_id: 3,
+                third_choice_id: 4,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 4,
+                voter_id: 13,
+                first_choice_id: 2,
+                second_choice_id: 3,
+                third_choice_id: 4,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 5,
+                voter_id: 14,
+                first_choice_id: 3,
+                second_choice_id: 4,
+                third_choice_id: 5,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 6,
+                voter_id: 15,
+                first_choice_id: 3,
+                second_choice_id: 4,
+                third_choice_id: 5,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 7,
+                voter_id: 16,
+                first_choice_id: 4,
+                second_choice_id: 5,
+                third_choice_id: 6,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 8,
+                voter_id: 17,
+                first_choice_id: 4,
+                second_choice_id: 5,
+                third_choice_id: 6,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 9,
+                voter_id: 18,
+                first_choice_id: 5,
+                second_choice_id: 1,
+                third_choice_id: 2,
+                submitted_at: Utc::now().naive_utc(),
+            },
+            Vote {
+                id: 10,
+                voter_id: 19,
+                first_choice_id: 6,
+                second_choice_id: 2,
+                third_choice_id: 1,
+                submitted_at: Utc::now().naive_utc(),
+            },
+        ];
+        let candidates = vec![1, 2, 3, 4, 5, 6];
+
+        let result = compute_rcv(&votes, &candidates);
+        assert_eq!(result.winner_id, None);
+        assert_eq!(result.rounds.len(), 3);
+        // Round 1: 1 > 2, 2 > 2, 3 > 2, 4 > 2, 5 > 1, 6 > 1
+        // No majority. 5, 6 are eliminated.
+        assert_eq!(
+            result.rounds[0].tallies,
+            vec![(1, 2), (2, 2), (3, 2), (4, 2), (5, 1), (6, 1)]
+        );
+        assert_eq!(result.rounds[0].eliminated, vec![5, 6]);
+        assert_eq!(result.rounds[0].winner, None);
+        // Round 2: 1 > 3, 2 > 3, 3 > 2, 4 > 2
+        // No majority. 3, 4 are eliminated.
+        assert_eq!(
+            result.rounds[1].tallies,
+            vec![(1, 3), (2, 3), (3, 2), (4, 2)]
+        );
+        assert_eq!(result.rounds[1].eliminated, vec![3, 4]);
+        assert_eq!(result.rounds[1].winner, None);
+        // Round 3: 1 > 3, 2 > 3
+        // No majority. 1, 2 are eliminated.
+        assert_eq!(result.rounds[2].tallies, vec![(1, 3), (2, 3)]);
+        assert_eq!(result.rounds[2].eliminated, vec![1, 2]);
+        assert_eq!(result.rounds[2].winner, None);
     }
 }

@@ -68,12 +68,33 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    votes (id) {
+        id -> Integer,
+        voter_id -> Integer,
+        first_choice_id -> Integer,
+        second_choice_id -> Integer,
+        third_choice_id -> Integer,
+        submitted_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    voting_status (id) {
+        id -> Integer,
+        is_open -> Integer,
+        opened_at -> Nullable<Timestamp>,
+        closed_at -> Nullable<Timestamp>,
+    }
+}
+
 diesel::joinable!(crossword_states -> guests (guest_id));
 diesel::joinable!(guests -> houses (house_id));
 diesel::joinable!(house_crossword_completions -> houses (house_id));
 diesel::joinable!(point_awards -> guests (guest_id));
 diesel::joinable!(point_awards -> houses (house_id));
 diesel::joinable!(sessions -> guests (guest_id));
+diesel::joinable!(votes -> guests (voter_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     admin_sessions,
@@ -83,4 +104,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     houses,
     point_awards,
     sessions,
+    votes,
+    voting_status,
 );

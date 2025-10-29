@@ -683,6 +683,18 @@ body {
     width: 100%;
     margin-bottom: 10px;
   }
+
+  .best-dressed form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .form-group label {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 // Applies a serif font (Georgia) to headings for a Harry Potter vibe, with a
@@ -1015,4 +1027,55 @@ h2, h3 {
   @extend .btn-secondary; // Gray secondary button, like "Show QR".
   margin: 10px auto 20px; // Center below header, with spacing.
   display: block; // Ensure centering works.
+}
+
+@mixin round-style {
+  margin-bottom: 20px;
+  padding: 10px;
+  background-color: #121213;
+  border-radius: 4px;
+}
+
+// Best Dressed page: Similar to forms, centered, with winner section.
+.best-dressed {
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: left;
+  padding: 20px;
+
+  .winner-section {
+    margin-top: 40px;
+    padding: 20px;
+    background-color: #1a1a1b;
+    border-radius: 8px;
+    border: 1px solid #3a3a3c;
+
+    h2, h3, h4 {
+      text-align: center;
+      color: #b59f3a;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+
+      li {
+        padding: 5px;
+        border-bottom: 1px solid #3a3a3c;
+      }
+    }
+
+    .round {
+      @include round-style;  // Changed: Include mixin instead of defining inline.
+    }
+  }
+}
+
+// RCV display in admin: Compact table/list for rounds.
+.rcv-display {
+  margin-top: 20px;
+
+  .round {
+    @include round-style;
+  }
 }
