@@ -21,8 +21,8 @@ use crate::{
     award_points_to_house, close_voting, create_admin_session, get_all_active_guests,
     get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
     get_guest_token, get_house_crossword_progress, get_or_init_crossword_state, get_rcv_result,
-    has_voted, init_voting_status, open_voting, register_guest, reregister_guest, submit_vote,
-    unregister_guest, update_crossword_state, validate_admin_token, voting_is_open,
+    get_user_vote, has_voted, init_voting_status, open_voting, register_guest, reregister_guest,
+    submit_vote, unregister_guest, update_crossword_state, validate_admin_token, voting_is_open,
 };
 use crate::{
     model::{CrosswordState, Guest, House, PointAwardLog, RcvResult, SparseState},
@@ -542,6 +542,19 @@ pub async fn get_active_guests_for_voting() -> Result<Vec<Guest>, AppError> {
     tokio::task::spawn_blocking(move || {
         let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
         get_all_active_guests(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetUserVote)]
+pub async fn get_user_vote_handler() -> Result<Option<(Guest, Guest, Guest)>, AppError> {
+    let maybe_user = get_current_user().await?;
+    let guest = maybe_user.ok_or(AppError::AuthError("Must be logged in".to_string()))?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_user_vote(&mut conn, guest.id).map_err(|e| AppError::DbError(e.to_string()))
     })
     .await
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
@@ -1603,7 +1616,7 @@ fn AdminDashboard() -> impl IntoView {
                                                             _ => {
                                                                 view! {
                                                                     <tr>
-                                                                        <td colspan="5">"Error laoding progress"</td>
+                                                                        <td colspan="5">"Error loading progress"</td>
                                                                     </tr>
                                                                 }
                                                                     .into_view()
@@ -1629,18 +1642,18 @@ fn AdminDashboard() -> impl IntoView {
                                                     if *is_open {
                                                         view! {
                                                             <p>
-                                                            <button class="btn-primary" on:click=close_voting_click>
-                                                                "Close Voting"
-                                                            </button>
+                                                                <button class="btn-primary" on:click=close_voting_click>
+                                                                    "Close Voting"
+                                                                </button>
                                                             </p>
                                                         }
                                                             .into_any()
                                                     } else {
                                                         view! {
                                                             <p>
-                                                            <button class="btn-primary" on:click=open_voting_click>
-                                                                "Open Voting"
-                                                            </button>
+                                                                <button class="btn-primary" on:click=open_voting_click>
+                                                                    "Open Voting"
+                                                                </button>
                                                             </p>
                                                         }
                                                             .into_any()
@@ -2391,6 +2404,7 @@ fn BestDressed() -> impl IntoView {
     let has_voted_fetcher = Resource::new(|| (), |_| has_voted_handler());
     let guests_fetcher = Resource::new(|| (), |_| get_active_guests_for_voting());
     let rcv_result_fetcher = Resource::new(|| (), |_| get_rcv_result_handler());
+    let user_vote_fetcher = Resource::new(|| (), |_| get_user_vote_handler());
 
     let first_choice = RwSignal::new(0i32);
     let second_choice = RwSignal::new(0i32);
@@ -2424,7 +2438,7 @@ fn BestDressed() -> impl IntoView {
             <a class="back-link" href="/">
                 "← Home"
             </a>
-            <h1>"Best Dressed Voting"</h1>
+            <h1>"Best Dressed"</h1>
             <Suspense fallback=|| {
                 view! { <p>"Loading..."</p> }
             }>
@@ -2437,7 +2451,40 @@ fn BestDressed() -> impl IntoView {
                         if !is_open {
                             view! { <p>"Voting is closed."</p> }.into_any()
                         } else if has_voted {
-                            view! { <p>"Your vote has been submitted."</p> }.into_any()
+                            view! {
+                                <section class="voted-section">
+                                    <h3>"Thank you for voting!"</h3>
+                                    <ul>
+                                        {move || {
+                                            user_vote_fetcher
+                                                .get()
+                                                .and_then(|vote_res| vote_res.ok())
+                                                .map(|maybe_vote| {
+                                                    if let Some((first, second, third)) = maybe_vote {
+                                                        view! {
+                                                            <li>
+                                                                "1. " {first.name} " - "
+                                                                {first.character.as_deref().unwrap_or("Unknown")}
+                                                            </li>
+                                                            <li>
+                                                                "2. " {second.name} " - "
+                                                                {second.character.as_deref().unwrap_or("Unknown")}
+                                                            </li>
+                                                            <li>
+                                                                "3. " {third.name} " - "
+                                                                {third.character.as_deref().unwrap_or("Unknown")}
+                                                            </li>
+                                                        }
+                                                            .into_any()
+                                                    } else {
+                                                        view! { <li>"Vote details unavailable"</li> }.into_any()
+                                                    }
+                                                })
+                                        }}
+                                    </ul>
+                                </section>
+                            }
+                                .into_any()
                         } else {
                             let user = user.clone();
                             view! {
@@ -2451,24 +2498,34 @@ fn BestDressed() -> impl IntoView {
                                             }>
                                                 <option value="0">"Select"</option>
                                                 {
-                                                let user = user.clone();
-                                                move || {
-                                                    guests_fetcher
-                                                        .get()
-                                                        .and_then(|g_res| g_res.ok())
-                                                        .map(|guests| {
-                                                            guests
-                                                                .into_iter()
-                                                                .filter(|g| {
-                                                                    g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
-                                                                })
-                                                                .map(|g| {
-                                                                    view! { <option value=g.id>{g.name}</option> }
-                                                                })
-                                                                .collect_view()
-                                                        })
-                                                        .unwrap_or_default()
-                                                }}
+                                                    let user = user.clone();
+                                                    move || {
+                                                        guests_fetcher
+                                                            .get()
+                                                            .and_then(|g_res| g_res.ok())
+                                                            .map(|guests| {
+                                                                guests
+                                                                    .into_iter()
+                                                                    .filter(|g| {
+                                                                        g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
+                                                                    })
+                                                                    .map(|g| {
+                                                                        view! {
+                                                                            <option value=g
+                                                                                .id>
+                                                                                {g.name.clone()}
+                                                                                {g
+                                                                                    .character
+                                                                                    .as_deref()
+                                                                                    .map_or("Unknown".to_string(), |c| format!(" - {}", c))}
+                                                                            </option>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()
+                                                            })
+                                                            .unwrap_or_default()
+                                                    }
+                                                }
                                             </select>
                                         </label>
                                     </div>
@@ -2481,24 +2538,34 @@ fn BestDressed() -> impl IntoView {
                                             }>
                                                 <option value="0">"Select"</option>
                                                 {
-                                                let user = user.clone();
-                                                move || {
-                                                    guests_fetcher
-                                                        .get()
-                                                        .and_then(|g_res| g_res.ok())
-                                                        .map(|guests| {
-                                                            guests
-                                                                .into_iter()
-                                                                .filter(|g| {
-                                                                    g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
-                                                                })
-                                                                .map(|g| {
-                                                                    view! { <option value=g.id>{g.name}</option> }
-                                                                })
-                                                                .collect_view()
-                                                        })
-                                                        .unwrap_or_default()
-                                                }}
+                                                    let user = user.clone();
+                                                    move || {
+                                                        guests_fetcher
+                                                            .get()
+                                                            .and_then(|g_res| g_res.ok())
+                                                            .map(|guests| {
+                                                                guests
+                                                                    .into_iter()
+                                                                    .filter(|g| {
+                                                                        g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
+                                                                    })
+                                                                    .map(|g| {
+                                                                        view! {
+                                                                            <option value=g
+                                                                                .id>
+                                                                                {g.name.clone()}
+                                                                                {g
+                                                                                    .character
+                                                                                    .as_deref()
+                                                                                    .map_or("Unknown".to_string(), |c| format!(" - {}", c))}
+                                                                            </option>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()
+                                                            })
+                                                            .unwrap_or_default()
+                                                    }
+                                                }
                                             </select>
                                         </label>
                                     </div>
@@ -2511,24 +2578,34 @@ fn BestDressed() -> impl IntoView {
                                             }>
                                                 <option value="0">"Select"</option>
                                                 {
-                                                let user = user.clone();
-                                                move || {
-                                                    guests_fetcher
-                                                        .get()
-                                                        .and_then(|g_res| g_res.ok())
-                                                        .map(|guests| {
-                                                            guests
-                                                                .into_iter()
-                                                                .filter(|g| {
-                                                                    g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
-                                                                })
-                                                                .map(|g| {
-                                                                    view! { <option value=g.id>{g.name}</option> }
-                                                                })
-                                                                .collect_view()
-                                                        })
-                                                        .unwrap_or_default()
-                                                }}
+                                                    let user = user.clone();
+                                                    move || {
+                                                        guests_fetcher
+                                                            .get()
+                                                            .and_then(|g_res| g_res.ok())
+                                                            .map(|guests| {
+                                                                guests
+                                                                    .into_iter()
+                                                                    .filter(|g| {
+                                                                        g.id != user.as_ref().map(|u| u.id).unwrap_or(0)
+                                                                    })
+                                                                    .map(|g| {
+                                                                        view! {
+                                                                            <option value=g
+                                                                                .id>
+                                                                                {g.name.clone()}
+                                                                                {g
+                                                                                    .character
+                                                                                    .as_deref()
+                                                                                    .map_or("Unknown".to_string(), |c| format!(" - {}", c))}
+                                                                            </option>
+                                                                        }
+                                                                    })
+                                                                    .collect_view()
+                                                            })
+                                                            .unwrap_or_default()
+                                                    }
+                                                }
                                             </select>
                                         </label>
                                     </div>

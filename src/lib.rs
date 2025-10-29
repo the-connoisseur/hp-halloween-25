@@ -946,6 +946,34 @@ pub fn has_voted(
 }
 
 #[cfg(feature = "ssr")]
+pub fn get_user_vote(
+    conn: &mut SqliteConnection,
+    user_id: i32,
+) -> Result<Option<(Guest, Guest, Guest)>, diesel::result::Error> {
+    let vote: Option<Vote> = votes::table
+        .filter(votes::voter_id.eq(user_id))
+        .first(conn)
+        .optional()?;
+
+    match vote {
+        Some(v) => {
+            let first: Guest = guests::table
+                .filter(guests::id.eq(v.first_choice_id))
+                .first(conn)?;
+            let second: Guest = guests::table
+                .filter(guests::id.eq(v.second_choice_id))
+                .first(conn)?;
+            let third: Guest = guests::table
+                .filter(guests::id.eq(v.third_choice_id))
+                .first(conn)?;
+
+            Ok(Some((first, second, third)))
+        }
+        None => Ok(None),
+    }
+}
+
+#[cfg(feature = "ssr")]
 pub fn get_all_votes(conn: &mut SqliteConnection) -> Result<Vec<Vote>, diesel::result::Error> {
     votes::table.select(Vote::as_select()).load(conn)
 }

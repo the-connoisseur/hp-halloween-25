@@ -1040,7 +1040,7 @@ h2, h3 {
 .best-dressed {
   max-width: 600px;
   margin: 0 auto;
-  text-align: left;
+  text-align: center;
   padding: 20px;
 
   .winner-section {
@@ -1077,5 +1077,31 @@ h2, h3 {
 
   .round {
     @include round-style;
+  }
+}
+
+.voted-section {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: #1a1a1b;
+  border-radius: 4px;
+  border: 1px solid #3a3a3c;
+
+  h3 {
+    margin: 0 0 10px 0;
+    color: #b59f3a;
+  }
+
+  ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+
+    li {
+      margin: 5px 0;
+      padding: 5px 0;
+      color: #ffffff;
+      font-size: 1.1em;
+    }
   }
 }
