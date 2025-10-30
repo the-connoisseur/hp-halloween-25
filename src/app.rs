@@ -21,8 +21,9 @@ use crate::{
     award_points_to_house, close_voting, create_admin_session, get_all_active_guests,
     get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
     get_guest_token, get_house_crossword_progress, get_or_init_crossword_state, get_rcv_result,
-    get_user_vote, has_voted, init_voting_status, open_voting, register_guest, reregister_guest,
-    submit_vote, unregister_guest, update_crossword_state, validate_admin_token, voting_is_open,
+    get_user_vote, get_voting_stats, has_voted, init_voting_status, open_voting, register_guest,
+    reregister_guest, reset_votes, submit_vote, unregister_guest, update_crossword_state,
+    validate_admin_token, voting_is_open,
 };
 use crate::{
     model::{CrosswordState, Guest, House, PointAwardLog, RcvResult, SparseState},
@@ -560,6 +561,30 @@ pub async fn get_user_vote_handler() -> Result<Option<(Guest, Guest, Guest)>, Ap
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
+#[server(ResetVotes)]
+pub async fn reset_votes_handler() -> Result<(), AppError> {
+    check_admin().await?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        reset_votes(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(GetVotingStats)]
+pub async fn get_voting_stats_handler() -> Result<(i64, i64), AppError> {
+    check_admin().await?;
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        get_voting_stats(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
 const WORDS: &[&str] = &[
     "apple", "bread", "break", "broad", "tread", "bleed", "dreab",
 ];
@@ -1046,6 +1071,7 @@ fn AdminDashboard() -> impl IntoView {
         Resource::new(|| (), |_| get_house_crossword_progress_handler());
     let voting_status_fetcher = Resource::new(|| (), |_| voting_is_open_handler());
     let rcv_result_fetcher = Resource::new(|| (), |_| get_rcv_result_handler());
+    let voting_stats_fetcher = Resource::new(|| (), |_| get_voting_stats_handler());
 
     // Redirects to the home page if a user who isn't logged in as an admin tries to visit the
     // admin dashboard.
@@ -1225,6 +1251,7 @@ fn AdminDashboard() -> impl IntoView {
             {
                 let _ = open_voting_handler().await;
                 voting_status_fetcher.refetch();
+                voting_stats_fetcher.refetch();
             }
         });
     };
@@ -1238,6 +1265,24 @@ fn AdminDashboard() -> impl IntoView {
                 let _ = close_voting_handler().await;
                 voting_status_fetcher.refetch();
                 rcv_result_fetcher.refetch();
+                voting_stats_fetcher.refetch();
+            }
+        });
+    };
+
+    let reset_vote_click = move |_| {
+        spawn_local(async move {
+            if leptos::leptos_dom::helpers::window()
+                .confirm_with_message("Reset all votes? This cannot be undone.")
+                .unwrap_or(false)
+            {
+                if let Err(e) = reset_votes_handler().await {
+                    log!("Reset votes failed: {}", e);
+                } else {
+                    voting_status_fetcher.refetch();
+                    rcv_result_fetcher.refetch();
+                    voting_stats_fetcher.refetch();
+                }
             }
         });
     };
@@ -1257,7 +1302,7 @@ fn AdminDashboard() -> impl IntoView {
                                 <h1>"Admin Dashboard"</h1>
                             </header>
 
-                            <section class="admin-section">
+                            <section class="admin-section centered">
                                 <h2>"Register New Guest"</h2>
                                 <form class="admin-form register-form" on:submit=register_submit>
                                     <div class="form-group">
@@ -1385,7 +1430,7 @@ fn AdminDashboard() -> impl IntoView {
                                 }}
                             </section>
 
-                            <section class="admin-section">
+                            <section class="admin-section centered">
                                 <h2>"Award Points to House"</h2>
                                 <form class="admin-form award-form" on:submit=award_house_submit>
                                     <div class="form-group">
@@ -1481,7 +1526,7 @@ fn AdminDashboard() -> impl IntoView {
                                 }}
                             </Suspense>
 
-                            <section class="admin-section">
+                            <section class="admin-section centered">
                                 <h2>"Active Guests"</h2>
                                 <div class="table-responsive">
                                     <table class="admin-table">
@@ -1565,7 +1610,7 @@ fn AdminDashboard() -> impl IntoView {
                                 </div>
                             </section>
 
-                            <section class="admin-section">
+                            <section class="admin-section centered">
                                 <h2>"Horcrux Hunt"</h2>
                                 <div class="table-responisive">
                                     <table class="admin-table horcrux-table">
@@ -1630,7 +1675,7 @@ fn AdminDashboard() -> impl IntoView {
                                 </div>
                             </section>
 
-                            <section class="admin-section">
+                            <section class="admin-section centered">
                                 <h2>"Best Dressed Voting"</h2>
                                 <Suspense fallback=|| {
                                     view! { <p>"Loading..."</p> }
@@ -1641,20 +1686,43 @@ fn AdminDashboard() -> impl IntoView {
                                                 if let Some(Ok(is_open)) = maybe_status {
                                                     if *is_open {
                                                         view! {
-                                                            <p>
+                                                            <div class="voting-buttons">
                                                                 <button class="btn-primary" on:click=close_voting_click>
                                                                     "Close Voting"
                                                                 </button>
-                                                            </p>
+                                                                <button class="btn-secondary" on:click=reset_vote_click>
+                                                                    "Reset Votes"
+                                                                </button>
+                                                            </div>
+                                                            <Suspense fallback=|| {
+                                                                view! { <p>"Loading stats..."</p> }
+                                                            }>
+                                                                {move || {
+                                                                    voting_stats_fetcher
+                                                                        .with(|maybe_stats| {
+                                                                            if let Some(Ok((votes, total))) = maybe_stats {
+                                                                                view! {
+                                                                                    <p class="vote-stats">"Votes: " {*votes} " / " {*total}</p>
+                                                                                }
+                                                                                    .into_any()
+                                                                            } else {
+                                                                                view! { <p>"Loading stats..."</p> }.into_any()
+                                                                            }
+                                                                        })
+                                                                }}
+                                                            </Suspense>
                                                         }
                                                             .into_any()
                                                     } else {
                                                         view! {
-                                                            <p>
+                                                            <div>
                                                                 <button class="btn-primary" on:click=open_voting_click>
                                                                     "Open Voting"
                                                                 </button>
-                                                            </p>
+                                                                <button class="btn-secondary" on:click=reset_vote_click>
+                                                                    "Reset Votes"
+                                                                </button>
+                                                            </div>
                                                         }
                                                             .into_any()
                                                     }
@@ -1673,26 +1741,34 @@ fn AdminDashboard() -> impl IntoView {
                                             .with(|maybe_result| {
                                                 if let Some(Ok(result)) = maybe_result {
                                                     let result = result.clone();
-                                                    if let Some(winner_id) = result.winner_id {
+                                                    if !result.rounds.is_empty() {
                                                         view! {
                                                             <div class="rcv-display">
-                                                                <h3>
-                                                                    "Best Dressed Winner: "
-                                                                    {move || {
-                                                                        active_guests_fetcher
-                                                                            .with(|maybe_guests| {
-                                                                                if let Some(Ok(guests)) = maybe_guests {
-                                                                                    guests
-                                                                                        .iter()
-                                                                                        .find(|g| g.id == winner_id)
-                                                                                        .map(|g| g.name.clone())
-                                                                                } else {
-                                                                                    None
-                                                                                }
-                                                                            })
-                                                                            .unwrap_or("Unknown".to_string())
-                                                                    }}
-                                                                </h3>
+                                                                {if let Some(winner_id) = result.winner_id {
+                                                                    view! {
+                                                                        <h3>
+                                                                            "Best Dressed Winner: "
+                                                                            {move || {
+                                                                                active_guests_fetcher
+                                                                                    .with(|maybe_guests| {
+                                                                                        if let Some(Ok(guests)) = maybe_guests {
+                                                                                            guests
+                                                                                                .iter()
+                                                                                                .find(|g| g.id == winner_id)
+                                                                                                .map(|g| g.name.clone())
+                                                                                        } else {
+                                                                                            None
+                                                                                        }
+                                                                                    })
+                                                                                    .unwrap_or("Unknown".to_string())
+                                                                            }}
+                                                                        </h3>
+                                                                    }
+                                                                        .into_any()
+                                                                } else {
+                                                                    view! { <h3>"No Clear Winner - Full Results:"</h3> }
+                                                                        .into_any()
+                                                                }}
                                                                 {result
                                                                     .rounds
                                                                     .iter()
@@ -1748,8 +1824,8 @@ fn AdminDashboard() -> impl IntoView {
                                                                                                                                 guests
                                                                                                                                     .iter()
                                                                                                                                     .find(|g| g.id == id)
-                                                                                                                                    .map(|g| g.name.clone())
-                                                                                                                                    .unwrap_or_else(|| format!("ID {}", id))
+                                                                                                                                    .map(|g| format!("{}, ", g.name))
+                                                                                                                                    .unwrap_or_else(|| format!("ID {}, ", id))
                                                                                                                             } else {
                                                                                                                                 format!("ID: {}", id)
                                                                                                                             }
@@ -1776,7 +1852,7 @@ fn AdminDashboard() -> impl IntoView {
                                                     } else {
                                                         view! {
                                                             <div class="rcv-display">
-                                                                <p>"No winner yet."</p>
+                                                                <p>"No results yet."</p>
                                                             </div>
                                                         }
                                                             .into_any()
@@ -1789,7 +1865,7 @@ fn AdminDashboard() -> impl IntoView {
                                 </Suspense>
                             </section>
 
-                            <section class="admin-section">
+                            <section class="admin-section centered">
                                 <h2>"Point Awards History"</h2>
                                 <div class="table-responsive">
                                     <table class="admin-table">
@@ -2427,6 +2503,7 @@ fn BestDressed() -> impl IntoView {
                     error.set(String::new());
                     success.set(true);
                     has_voted_fetcher.refetch();
+                    user_vote_fetcher.refetch();
                 }
                 Err(e) => error.set(e.to_string()),
             }

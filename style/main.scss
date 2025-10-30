@@ -387,6 +387,10 @@ body {
   border: 1px solid #3a3a3c;
 }
 
+.admin-section.centered {
+  text-align: center;
+}
+
 // Uses flexbox to stack form elements vertically with gaps between them for
 // clean, readable forms.
 .admin-form {
@@ -1104,4 +1108,19 @@ h2, h3 {
       font-size: 1.1em;
     }
   }
+}
+
+.voting-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.vote-stats {
+  font-size: 1.5em;  // Large, prominent.
+  font-weight: bold;
+  color: #b59f3a;  // Yellow for visibility.
+  margin: 10px 0;
+  text-align: center;  // Centered.
 }

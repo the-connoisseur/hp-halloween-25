@@ -979,6 +979,23 @@ pub fn get_all_votes(conn: &mut SqliteConnection) -> Result<Vec<Vote>, diesel::r
 }
 
 #[cfg(feature = "ssr")]
+pub fn reset_votes(conn: &mut SqliteConnection) -> Result<(), diesel::result::Error> {
+    diesel::delete(votes::table).execute(conn)?;
+    Ok(())
+}
+
+/// Returns the tuple (votes submitted, active guests).
+#[cfg(feature = "ssr")]
+pub fn get_voting_stats(conn: &mut SqliteConnection) -> Result<(i64, i64), diesel::result::Error> {
+    let vote_count: i64 = votes::table.count().get_result(conn)?;
+    let active_count: i64 = guests::table
+        .filter(guests::is_active.eq(1i32))
+        .count()
+        .get_result(conn)?;
+    Ok((vote_count, active_count))
+}
+
+#[cfg(feature = "ssr")]
 pub fn compute_rcv(votes: &[Vote], candidates: &[i32]) -> RcvResult {
     if candidates.is_empty() {
         return RcvResult {
