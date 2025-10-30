@@ -763,7 +763,9 @@ fn Home() -> impl IntoView {
                                 view! {
                                     <section class="login-section centered">
                                         <p>
-                                            <a href="/login">"Login"</a>
+                                            <a class="btn-primary" href="/login">
+                                                "Login"
+                                            </a>
                                         </p>
                                     </section>
                                 }
@@ -809,9 +811,11 @@ fn Home() -> impl IntoView {
                         .with(|admin| match admin {
                             Some(Ok(true)) => {
                                 view! {
-                                    <section class="home-section">
+                                    <section class="home-section centered">
                                         <p>
-                                            <a href="/admin">"Admin Dashboard"</a>
+                                            <a class="btn-primary" href="/admin">
+                                                "Admin Dashboard"
+                                            </a>
                                         </p>
                                     </section>
                                 }
