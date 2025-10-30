@@ -615,6 +615,8 @@ struct WordDef {
     dir: Direction,
     answer: &'static str,
     reveal_text: &'static str,
+    location: &'static str,
+    horcrux: &'static str,
 }
 
 const CROSSWORD_DEFS: &[WordDef] = &[
@@ -625,6 +627,8 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         dir: Direction::Across,
         answer: "WINKY",
         reveal_text: "Behind a door where secrets sleep,\nI slither low, my watch I keep.\nNo voice, no spell, just breath and skin,\nThe darkness stirs, I wait within.",
+        location: "Newspaper",
+        horcrux: "Nagini",
     },
     WordDef {
         start_row: 6,
@@ -633,6 +637,8 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         dir: Direction::Across,
         answer: "EXPELLIARMUS",
         reveal_text: "Where portraits purr in rose-tinted frame,\nI nest in her china, igniting no flame.\nEmblem of lineage, cold and entwined,\nI whisper old venom, twisting the mind.",
+        location: "Room of Req",
+        horcrux: "Locket",
     },
     WordDef {
         start_row: 2,
@@ -641,6 +647,8 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         dir: Direction::Down,
         answer: "DISSENDIUM",
         reveal_text: "With lemon drops and half-moon gaze,\nI unravel riddles through misty haze.\nFrom elder's core, my power flows,\nShepherding souls where the wild wind blows.",
+        location: "Azkaban",
+        horcrux: "Ring",
     },
     WordDef {
         start_row: 0,
@@ -648,7 +656,9 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 8,
         dir: Direction::Down,
         answer: "SNUFFLES",
-        reveal_text: "Once a token of toil and truth,\nNow a prison to deathless youth.\nGold surrounds me, bright and deep,\nYet secrets foul within me sleep.",
+        reveal_text: "Among the sweets where riches gleam,\nA creature guards its golden dream.\nWhat glitters bright in sugared hue,\nConceals the pride of those loyal and true.",
+        location: "Bathroom",
+        horcrux: "Cup",
     },
     WordDef {
         start_row: 5,
@@ -656,7 +666,9 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         len: 10,
         dir: Direction::Down,
         answer: "SIRCADOGAN",
-        reveal_text: "Among the brave, I should not be,\nYet here I wait, in secrecy.\nMy pages whisper lies and lore,\nTo open hearts - and something more.",
+        reveal_text: "You've shown your courage and wit so true,\nNow red and gold shall welcome you.\nStep through - but hush, for what you seek\nHolds words that whisper, though their writer can't speak.",
+        location: "Dept of Mysteries",
+        horcrux: "Diary",
     },
     WordDef {
         start_row: 3,
@@ -665,6 +677,8 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         dir: Direction::Down,
         answer: "BOARHOUND",
         reveal_text: "At the threshold where paths align,\nCloak, wand, and stone combine.\nThrough death I passed, through love restored,\nNow hang I here at fate's own door.",
+        location: "Photo frame",
+        horcrux: "Harry",
     },
     WordDef {
         start_row: 1,
@@ -673,6 +687,8 @@ const CROSSWORD_DEFS: &[WordDef] = &[
         dir: Direction::Down,
         answer: "IGNOTUS",
         reveal_text: "\"Wit beyond measure\" once was prized,\nNow in your clutter, undisguised.\nAmong the things you cast aside,\nThe clever crown still tries to hide.",
+        location: "Mirror",
+        horcrux: "Diadem",
     },
 ];
 

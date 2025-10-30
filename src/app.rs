@@ -1620,7 +1620,8 @@ fn AdminDashboard() -> impl IntoView {
                                     <table class="admin-table horcrux-table">
                                         <thead>
                                             <tr>
-                                                <th>"#"</th>
+                                                <th>"Location"</th>
+                                                <th>"Horcrux"</th>
                                                 <th>"G"</th>
                                                 <th>"H"</th>
                                                 <th>"R"</th>
@@ -1631,7 +1632,7 @@ fn AdminDashboard() -> impl IntoView {
                                             <Suspense fallback=|| {
                                                 view! {
                                                     <tr>
-                                                        <td colspan="5">"Loading..."</td>
+                                                        <td colspan="6">"Loading..."</td>
                                                     </tr>
                                                 }
                                             }>
@@ -1643,7 +1644,8 @@ fn AdminDashboard() -> impl IntoView {
                                                                     .map(|word_idx| {
                                                                         view! {
                                                                             <tr>
-                                                                                <td>{(word_idx + 1).to_string()}</td>
+                                                                                <td>{CROSSWORD_DEFS[word_idx as usize].location}</td>
+                                                                                <td>{CROSSWORD_DEFS[word_idx as usize].horcrux}</td>
                                                                                 {matrix
                                                                                     .iter()
                                                                                     .map(|house_row| {
@@ -1665,7 +1667,7 @@ fn AdminDashboard() -> impl IntoView {
                                                             _ => {
                                                                 view! {
                                                                     <tr>
-                                                                        <td colspan="5">"Error loading progress"</td>
+                                                                        <td colspan="6">"Error loading progress"</td>
                                                                     </tr>
                                                                 }
                                                                     .into_view()
