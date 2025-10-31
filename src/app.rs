@@ -630,6 +630,7 @@ pub fn App() -> impl IntoView {
                     <Route path=path!("/admin") view=AdminDashboard />
                     <Route path=path!("/games/wordle") view=Wordle />
                     <Route path=path!("/games/crossword") view=Crossword />
+                    <Route path=path!("/games/catch_the_keys") view=CatchTheKeys />
                     <Route path=path!("/games/best_dressed") view=BestDressed />
                 </Routes>
             </main>
@@ -685,6 +686,9 @@ fn Home() -> impl IntoView {
                             </a>
                             <a class="btn-game" href="/games/crossword">
                                 "Horcrux Hunt"
+                            </a>
+                            <a class="btn-game" href="/games/catch_the_keys">
+                                "Catch the Keys"
                             </a>
                             <Suspense fallback=|| {
                                 view! { <></> }
@@ -2477,6 +2481,41 @@ fn word_is_complete(grid: &Vec<Vec<Option<char>>>, def: &WordDef) -> bool {
         }
     }
     true
+}
+
+#[component]
+fn CatchTheKeys() -> impl IntoView {
+    view! {
+        <div class="catch-the-keys">
+            <a class="back-link" href="/">
+                "← Home"
+            </a>
+            <h1>"Catch the Keys"</h1>
+            <section class="rules-section">
+                <p>
+                    "When the Philosopher's Stone was destroyed, the winged keys managed to escape out into the castle. Professor Flitwick needs your help tracking them all down."
+                </p>
+                <h2>"Rules"</h2>
+                <p>
+                    "Since there are so many keys to find, Professor Flitwick has decided to divide and conquer. He has cast a clever charm that labels each key with a letter. If you see a key with a letter that is in your house's name, collect it."
+                </p>
+                <p>
+                    "Do NOT touch keys that don't belong to your house, or Professor Flitwick will get mad and deduct house points from you! Keys with a common letter on them, like 'R', can be claimed by a Gryffindor, a Ravenclaw, or a Slytherin."
+                </p>
+                <p>
+                    "A small number of keys are marked with an asterisk (
+                    "<strong>"*"</strong>
+                    "). These are wildcards and can be used in place of any letter in your house."
+                </p>
+                <p>
+                    "Gryffindors and Hufflepuffs, hand over your collected keys to Hagrid. Ravenclaws and Slytherins, to Harry. If you found all the letters of your house, you will be awarded house points for your diligence."
+                </p>
+                <p>
+                    <em>"Good luck, students!"</em>
+                </p>
+            </section>
+        </div>
+    }
 }
 
 #[component]

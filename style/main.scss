@@ -1085,6 +1085,39 @@ h2, h3 {
   }
 }
 
+.catch-the-keys {
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: center;
+  padding: 20px;
+
+  .rules-section {
+    text-align: left;
+    margin-top: 20px;
+
+    h2 {
+      text-align: center;
+      color: #b59f3a;
+      margin-bottom: 15px;
+    }
+
+    p {
+      margin: 10px 0;
+      line-height: 1.5;
+      color: #ffffff;
+
+      strong {
+        color: #b59f3a;
+      }
+
+      em {
+        color: #b59f3a;
+        font-style: italic;
+      }
+    }
+  }
+}
+
 // RCV display in admin: Compact table/list for rounds.
 .rcv-display {
   margin-top: 20px;
