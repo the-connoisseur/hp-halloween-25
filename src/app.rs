@@ -712,9 +712,6 @@ fn Home() -> impl IntoView {
                     <section class="home-section centered">
                         <h3>"Games and Activities"</h3>
                         <div class="games-buttons">
-                            <a class="btn-game" href="/games/wordle">
-                                "Hogwartle"
-                            </a>
                             <a class="btn-game" href="/games/crossword">
                                 "Horcrux Hunt"
                             </a>
