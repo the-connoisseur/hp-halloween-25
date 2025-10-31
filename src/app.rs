@@ -2564,25 +2564,25 @@ fn CatchTheKeys() -> impl IntoView {
             <h1>"Catch the Keys"</h1>
             <section class="rules-section">
                 <p>
-                    "When the Philosopher's Stone was destroyed, the winged keys managed to escape out into the castle. Professor Flitwick needs your help tracking them all down."
+                    "Someone has cast a charm on Hagrid's keys to give them wings, and they have taken flight! They are on the loose all over Hogwarts. Hagrid needs your help to round them up."
                 </p>
                 <h2>"Rules"</h2>
                 <p>
-                    "Since there are so many keys to find, Professor Flitwick has decided to divide and conquer. He has cast a clever charm that labels each key with a letter. If you see a key with a letter that is in your house's name, collect it."
+                    "Luckily, Hagrid has labeled them. Your goal is to find all the keys that spell your house name; i.e. if you are in RAVENCLAW and you see a key labeled 'R' or 'W', collect it."
                 </p>
                 <p>
-                    "Do NOT touch keys that don't belong to your house, or Professor Flitwick will get mad and deduct house points from you! Keys with a common letter on them, like 'R', can be claimed by a Gryffindor, a Ravenclaw, or a Slytherin."
+                    "Do NOT touch keys that don't belong to your house, that's a surefire way to lose your house some points! Keys with a common letter on them, like 'R', can be claimed by a Gryffindor, a Ravenclaw, or a Slytherin."
                 </p>
                 <p>
-                    "A small number of keys are marked with an asterisk (
-                    "<strong>"*"</strong>
-                    "). These are wildcards and can be used in place of any letter in your house."
+                    "A small number of keys are marked with an asterisk
+                    "<strong>"✷"</strong>
+                    ". These are wildcards and can be used in place of any letter in your house."
                 </p>
                 <p>
-                    "Gryffindors and Hufflepuffs, hand over your collected keys to Hagrid. Ravenclaws and Slytherins, to Harry. If you found all the letters of your house, you will be awarded house points for your diligence."
+                    "Gryffindors and Hufflepuffs, hand over your collected keys to Hagrid. Ravenclaws and Slytherins, to Harry. The first house to collect and turn in all their keys will win the most points, followed by others in order of completion."
                 </p>
                 <p>
-                    <em>"Good luck, students!"</em>
+                    <em>"Speed, team work, and honesty are key (literally)!"</em>
                 </p>
             </section>
         </div>
