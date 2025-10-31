@@ -246,6 +246,7 @@ pub struct VotingStatus {
     pub is_open: i32, // 0=closed, 1=open
     pub opened_at: Option<NaiveDateTime>,
     pub closed_at: Option<NaiveDateTime>,
+    pub games_enabled: i32,
 }
 
 #[cfg(feature = "ssr")]
@@ -255,6 +256,7 @@ pub struct NewVotingStatus {
     pub is_open: i32,
     pub opened_at: Option<chrono::NaiveDateTime>,
     pub closed_at: Option<chrono::NaiveDateTime>,
+    pub games_enabled: i32,
 }
 
 #[cfg(feature = "ssr")]

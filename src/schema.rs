@@ -85,6 +85,7 @@ diesel::table! {
         is_open -> Integer,
         opened_at -> Nullable<Timestamp>,
         closed_at -> Nullable<Timestamp>,
+        games_enabled -> Integer,
     }
 }
 

@@ -1,0 +1,2 @@
+ALTER TABLE voting_status ADD COLUMN games_enabled INTEGER NOT NULL DEFAULT 0;
+

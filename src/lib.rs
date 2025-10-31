@@ -842,12 +842,31 @@ pub fn init_voting_status(conn: &mut SqliteConnection) -> Result<(), diesel::res
             is_open: 0,
             opened_at: None,
             closed_at: None,
+            games_enabled: 0,
         };
         diesel::insert_into(voting_status::table)
             .values(&new_status)
             .execute(conn)?;
     }
     Ok(())
+}
+
+/// Returns true if games are enabled, false otherwise.
+#[cfg(feature = "ssr")]
+pub fn get_games_enabled(conn: &mut SqliteConnection) -> Result<bool, diesel::result::Error> {
+    let status: Option<VotingStatus> = voting_status::table.first(conn).optional()?;
+    Ok(status.map_or(false, |s| s.games_enabled == 1))
+}
+
+/// Toggles the state of games enabled, and returns the new state as a boolean.
+#[cfg(feature = "ssr")]
+pub fn toggle_games_enabled(conn: &mut SqliteConnection) -> Result<bool, diesel::result::Error> {
+    let current = get_games_enabled(conn)?;
+    let new_value = if current { 0 } else { 1 };
+    diesel::update(voting_status::table)
+        .set(voting_status::games_enabled.eq(new_value))
+        .execute(conn)?;
+    Ok(new_value == 1)
 }
 
 /// Returns true if voting is open, false otherwise.

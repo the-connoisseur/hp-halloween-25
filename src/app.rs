@@ -19,11 +19,11 @@ use wasm_bindgen::JsCast;
 #[cfg(feature = "ssr")]
 use crate::{
     award_points_to_house, close_voting, create_admin_session, get_all_active_guests,
-    get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_guest_by_token,
-    get_guest_token, get_house_crossword_progress, get_or_init_crossword_state, get_rcv_result,
-    get_user_vote, get_voting_stats, has_voted, init_voting_status, open_voting, register_guest,
-    reregister_guest, reset_votes, submit_vote, unregister_guest, update_crossword_state,
-    validate_admin_token, voting_is_open,
+    get_all_houses, get_all_point_awards, get_all_unregistered_guests, get_games_enabled,
+    get_guest_by_token, get_guest_token, get_house_crossword_progress, get_or_init_crossword_state,
+    get_rcv_result, get_user_vote, get_voting_stats, has_voted, init_voting_status, open_voting,
+    register_guest, reregister_guest, reset_votes, submit_vote, toggle_games_enabled,
+    unregister_guest, update_crossword_state, validate_admin_token, voting_is_open,
 };
 use crate::{
     model::{CrosswordState, Guest, House, PointAwardLog, RcvResult, SparseState},
@@ -585,6 +585,30 @@ pub async fn get_voting_stats_handler() -> Result<(i64, i64), AppError> {
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
 }
 
+#[server(GetGamesEnabled)]
+pub async fn get_games_enabled_handler() -> Result<bool, AppError> {
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        get_games_enabled(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
+#[server(ToggleGamesEnabled)]
+pub async fn toggle_games_enabled_handler() -> Result<bool, AppError> {
+    let pool: DbPool = expect_context();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| AppError::DbError(e.to_string()))?;
+        init_voting_status(&mut conn).map_err(|e| AppError::DbError(e.to_string()))?;
+        toggle_games_enabled(&mut conn).map_err(|e| AppError::DbError(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))?
+}
+
 const WORDS: &[&str] = &[
     "apple", "bread", "break", "broad", "tread", "bleed", "dreab",
 ];
@@ -670,12 +694,19 @@ fn Home() -> impl IntoView {
     });
 
     let voting_open_fetcher = Resource::new(|| (), |_| voting_is_open_handler());
+    let games_enabled_fetcher = Resource::new(|| (), |_| get_games_enabled_handler());
 
     let games_section = move || {
         current_user_fetcher
             .get()
             .and_then(|res| res.ok())
             .flatten()
+            .and_then(|_| {
+                games_enabled_fetcher
+                    .get()
+                    .and_then(|res| res.ok())
+                    .and_then(|enabled| if enabled { Some(()) } else { None })
+            })
             .map(|_| {
                 view! {
                     <section class="home-section centered">
@@ -1080,6 +1111,7 @@ fn AdminDashboard() -> impl IntoView {
     let voting_status_fetcher = Resource::new(|| (), |_| voting_is_open_handler());
     let rcv_result_fetcher = Resource::new(|| (), |_| get_rcv_result_handler());
     let voting_stats_fetcher = Resource::new(|| (), |_| get_voting_stats_handler());
+    let games_enabled_fetcher = Resource::new(|| (), |_| get_games_enabled_handler());
 
     // Redirects to the home page if a user who isn't logged in as an admin tries to visit the
     // admin dashboard.
@@ -1616,6 +1648,45 @@ fn AdminDashboard() -> impl IntoView {
                                         </tbody>
                                     </table>
                                 </div>
+                            </section>
+
+                            <section class="admin-section centered">
+                                <h2>"Games Toggle"</h2>
+                                <Suspense fallback=|| {
+                                    view! { <p>"Loading..."</p> }
+                                }>
+                                    {move || {
+                                        games_enabled_fetcher
+                                            .get()
+                                            .and_then(|res| res.ok())
+                                            .map(|enabled| {
+                                                let btn_class = if enabled {
+                                                    "btn-primary"
+                                                } else {
+                                                    "btn-danger"
+                                                };
+                                                let text = if enabled { "Enabled" } else { "Disabled" };
+                                                view! {
+                                                    <button
+                                                        class=btn_class
+                                                        on:click=move |_| {
+                                                            spawn_local(async move {
+                                                                let _ = toggle_games_enabled_handler().await;
+                                                                games_enabled_fetcher.refetch();
+                                                            });
+                                                        }
+                                                    >
+                                                        {text}
+                                                    </button>
+                                                }
+                                                    .into_any()
+                                            })
+                                            .unwrap_or_else(|| {
+                                                view! { <button class="btn-danger">"Disabled"</button> }
+                                                    .into_any()
+                                            })
+                                    }}
+                                </Suspense>
                             </section>
 
                             <section class="admin-section centered">
