@@ -74,7 +74,7 @@ pub async fn get_qr_for_guest(guest_id: i32) -> Result<String, AppError> {
     .await
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))??;
 
-    let base_url = "http://192.168.1.118:3000";
+    let base_url = "http://192.168.1.165:3000";
     let login_url = format!("{}/login?guest_id={}&token={}", base_url, guest_id, token);
 
     let qr_code = qrcode::QrCode::new(login_url.as_bytes()).map_err(|e| {
@@ -285,7 +285,7 @@ pub async fn register_guest_handler(
     .await
     .map_err(|e| AppError::DbError(format!("Task joining error: {}", e)))??;
 
-    let base_url = "http://192.168.1.118:3000";
+    let base_url = "http://192.168.1.165:3000";
     let login_url = format!("{}/login?guest_id={}&token={}", base_url, guest_id, token);
 
     let qr_code = qrcode::QrCode::new(login_url.as_bytes()).map_err(|e| {
